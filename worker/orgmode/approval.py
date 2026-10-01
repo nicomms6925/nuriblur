@@ -6,6 +6,8 @@
 - 결재선 저장은 관리자만. 단계 2~6.
 - 검수 완료(승인 요청)는 최근 렌더링의 노출 재검사가 0건(AUDITED)일 때만 가능.
 - 출력본 제공은 마지막 단계 승인 후에만.
+- 본인 확인(require_pin=1, 기본): 검수 완료·승인·반려는 **현재 단계 결재자**의 PIN으로만 가능하다(users.py).
+  감사 로그 행위자는 결재자 이름, 상세에 PC의 Windows 계정을 함께 남긴다.
 """
 from __future__ import annotations
 
@@ -16,7 +18,8 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from worker.orgmode import auditlog as A
-from worker.orgmode.db import OrgDB, now_iso
+from worker.orgmode.db import OrgDB, current_user, now_iso
+from worker.orgmode.users import AuthError, Users
 
 PRESETS: dict[int, list[str]] = {
     2: ["담당자 검수", "승인자"],
@@ -44,6 +47,19 @@ class Approval:
     def __init__(self, db: OrgDB):
         self.db = db
         self.log = A.AuditLog(db)
+        self.users = Users(db)
+
+    def _auth(self, cid: str, step: Step, pin: str, purpose: str) -> str:
+        """현재 단계 결재자 본인 확인. 감사 로그 행위자 이름을 돌려준다."""
+        if not self.users.required():
+            return step.user or current_user()
+        if not step.user:
+            raise ApprovalError(f"'{step.role}' 단계에 결재자가 지정되지 않았습니다 (결재선 설정)")
+        try:
+            self.users.verify(step.user, pin, purpose=purpose, case_id=cid)
+        except AuthError as e:
+            raise ApprovalError(str(e)) from e
+        return step.user
 
     # ---------- 결재선 설정 ----------
     def default_line(self) -> list[dict[str, str]]:
@@ -56,6 +72,10 @@ class Approval:
         if not self.db.is_admin(actor):
             raise PermissionError("결재선 설정은 기관 관리자만 저장할 수 있습니다")
         steps = [{"role": (s.get("role") or "").strip(), "user": (s.get("user") or "").strip()} for s in steps]
+        if self.users.required():
+            missing = [s["user"] or s["role"] for s in steps if not s["user"] or self.users.get(s["user"]) is None]
+            if missing:
+                raise ApprovalError("등록되지 않은 결재자: " + ", ".join(missing) + " (결재자 관리에서 먼저 등록)")
         if not (MIN_STEPS <= len(steps) <= MAX_STEPS):
             raise ApprovalError(f"결재 단계는 {MIN_STEPS}~{MAX_STEPS}단이어야 합니다")
         if any(not s["role"] for s in steps):
@@ -133,7 +153,7 @@ class Approval:
                         {"sha256": sha256, "audit_exposures": exposures}, cid)
 
     # ---------- 결재 ----------
-    def submit_review(self, cid: str, actor: str, comment: str = "") -> None:
+    def submit_review(self, cid: str, actor: str, comment: str = "", pin: str = "") -> None:
         """1단계(담당자 검수) 완료 = 승인 요청."""
         c = self.case(cid)
         if c["status"] != "REVIEWING":
@@ -141,41 +161,46 @@ class Approval:
         if c["audit_exposures"] is None or int(c["audit_exposures"]) != 0:
             raise ApprovalError("노출 재검사를 통과한(0건) 출력본이 있어야 승인 요청할 수 있습니다")
         first = self.steps(cid)[0]
+        who = self._auth(cid, first, pin, "검수 완료")
         self._decide(cid, first.step_no, "APPROVED", comment)
         self._status(cid, "PENDING_APPROVAL")
         nxt = self.current_step(cid)
-        self.log.append(actor, A.REVIEW_DONE, first.role,
-                        {"comment": comment, "next": f"{nxt.role}:{nxt.user}" if nxt else ""}, cid)
+        self.log.append(who, A.REVIEW_DONE, first.role,
+                        {"comment": comment, "next": f"{nxt.role}:{nxt.user}" if nxt else "", "pc_account": actor}, cid)
         if nxt is None:
             self._status(cid, "APPROVED")
 
-    def approve(self, cid: str, actor: str, comment: str = "") -> Step | None:
+    def approve(self, cid: str, actor: str, comment: str = "", pin: str = "") -> Step | None:
         c = self.case(cid)
         if c["status"] != "PENDING_APPROVAL":
             raise ApprovalError(f"결재 대기 상태가 아닙니다 ({c['status']})")
         cur = self.current_step(cid)
         if cur is None:
             raise ApprovalError("결재할 단계가 없습니다")
+        who = self._auth(cid, cur, pin, "승인")
         self._decide(cid, cur.step_no, "APPROVED", comment)
         nxt = self.current_step(cid)
-        self.log.append(actor, A.APPROVED, f"{cur.role}:{cur.user}",
-                        {"comment": comment, "next": f"{nxt.role}:{nxt.user}" if nxt else "출력 제공 가능"}, cid)
+        self.log.append(who, A.APPROVED, f"{cur.role}:{cur.user}",
+                        {"comment": comment, "next": f"{nxt.role}:{nxt.user}" if nxt else "출력 제공 가능",
+                         "pc_account": actor}, cid)
         if nxt is None:
             self._status(cid, "APPROVED")
         return nxt
 
-    def reject(self, cid: str, actor: str, reason: str) -> None:
+    def reject(self, cid: str, actor: str, reason: str, pin: str = "") -> None:
         if not reason.strip():
             raise ApprovalError("반려 사유를 입력해야 합니다")
         c = self.case(cid)
         if c["status"] not in ("PENDING_APPROVAL", "APPROVED"):
             raise ApprovalError(f"반려할 수 없는 상태입니다 ({c['status']})")
         cur = self.current_step(cid) or self.steps(cid)[-1]
+        who = self._auth(cid, cur, pin, "반려")
         with self.db.lock:
             self.db.conn.execute("UPDATE approval_step SET decision='PENDING', comment=NULL, decided_at=NULL "
                                  "WHERE case_id=?", (cid,))
         self._status(cid, "REVIEWING")
-        self.log.append(actor, A.REJECTED, f"{cur.role}:{cur.user}", {"reason": reason, "back_to": "REVIEWING"}, cid)
+        self.log.append(who, A.REJECTED, f"{cur.role}:{cur.user}",
+                        {"reason": reason, "back_to": "REVIEWING", "pc_account": actor}, cid)
 
     def _decide(self, cid: str, step_no: int, decision: str, comment: str) -> None:
         with self.db.lock:

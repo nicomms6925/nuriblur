@@ -15,6 +15,7 @@ service NuriBlurWorker {
   rpc GetFrame(FrameRequest) returns (FrameJpeg);               // 검수용 단일 프레임(원본/마스킹)
   rpc AllowRoot(AllowRootRequest) returns (Ack);                 // [G1-11 추가] UI가 승인한 작업 폴더 등록(경로 탈출 검사)
   rpc Health(Empty) returns (WorkerInfo);                        // [G1-11 추가] 기동 확인·실행 환경 배지
+  rpc TrackObject(TrackObjectRequest) returns (TrackObjectResult); // [G4-04 추가] 검수: 지정 객체 앞뒤 자동 추적
 }
 
 message ProbeRequest { string path = 1; }
@@ -60,6 +61,10 @@ message AuditRequest { string project_path = 1; string output_path = 2; }
 message AuditResult { int32 exposures = 1; repeated Box exposure_boxes = 2; }
 
 message AllowRootRequest { string path = 1; }
+message TrackObjectRequest { string project_path = 1; int64 frame = 2; Box box = 3;
+  string cls = 4;                         // face | plate | other
+  int32 max_frames = 5; bool both_directions = 6; }
+message TrackObjectResult { int64 start_f = 1; int64 end_f = 2; repeated Box boxes = 3; string method = 4; }
 message Empty {}
 message WorkerInfo { string version = 1; string ep = 2; repeated string providers = 3; repeated string encoders = 4; }
 

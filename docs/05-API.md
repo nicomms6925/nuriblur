@@ -46,3 +46,5 @@ CLI 종료 코드: 0 성공, 3 재검사 노출 있음, 4 모델 라이선스/�
 | `ListTracks(at_frame ≥ 0)` | 그 프레임에 있는 트랙만, 박스는 그 프레임 1개. `at_frame < 0`이면 전체 트랙(박스 없음)+병합 제안 |
 | `MatchReference`, `SegmentTrack` | `UNIMPLEMENTED` (V1/V2) |
 | 오류 코드 추가 | `E_BUSY`(같은 프로젝트 작업 중), `E_PATH`(경로 거부) |
+| `TrackObject(TrackObjectRequest) → TrackObjectResult` | [G4-04] 검수: 사용자가 한 프레임에서 드래그한 객체(face/plate/other)를 앞뒤로 자동 추적(해당 검출기 + 템플릿 매칭). UI는 결과 박스로 `manual_box` 규칙을 만든다 |
+| 이벤트 `warning W_FAST_MOTION` | 적응형 검출 간격: 빠른 움직임(타임랩스 등)으로 매 프레임 검출로 전환 |

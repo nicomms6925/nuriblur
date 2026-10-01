@@ -8,10 +8,18 @@ from worker.orgmode.approval import Approval, ApprovalError
 from worker.orgmode.db import OrgDB, current_user
 from worker.orgmode.retention import purge_expired
 
+PINS = {"김형남": "111111", "박문화": "222222", "이규홍": "333333", "a": "444444", "b": "555555",
+        "c": "666666", "d": "777777"}
+
 
 @pytest.fixture
 def org(tmp_path):
     db = OrgDB(tmp_path / "org.sqlite")
+    from worker.orgmode.users import Users
+
+    u = Users(db)
+    for name, pin in PINS.items():
+        u.register(name, pin, actor=current_user())
     yield db
     db.close()
 
@@ -43,6 +51,8 @@ def test_line_admin_only_and_snapshot(org):
     with pytest.raises(PermissionError):
         ap.save_line(Approval.preset(3, ["김", "박", "이"]), actor="not-admin")
     me = current_user()
+    with pytest.raises(ApprovalError):  # 등록되지 않은 결재자
+        ap.save_line(Approval.preset(3, ["김형남", "박문화", "홍길동"]), actor=me)
     ap.save_line(Approval.preset(3, ["김형남", "박문화", "이규홍"]), actor=me)
     cid = ap.create_case("2026-0928-113", "개인정보보호법 §35", "홍○○", "p.nbproj", me)
     ap.save_line(Approval.preset(4, ["a", "b", "c", "d"]), actor=me)  # 설정 변경
@@ -68,19 +78,27 @@ def test_full_approval_flow(org, tmp_path):
     with pytest.raises(ApprovalError):
         ap.submit_review(cid, me)  # 노출 있음
     ap.record_render(cid, me, str(out), "ab" * 32, exposures=0)
-    ap.submit_review(cid, me, "검수 완료")
+    with pytest.raises(ApprovalError):  # 1단계 결재자(김형남) PIN이 아님
+        ap.submit_review(cid, me, "검수 완료", pin=PINS["박문화"])
+    ap.submit_review(cid, me, "검수 완료", pin=PINS["김형남"])
     assert ap.case(cid)["status"] == "PENDING_APPROVAL" and ap.current_step(cid).role == "팀장"
     with pytest.raises(ApprovalError):
         ap.deliver(cid, me)
-    ap.approve(cid, "박문화", "확인")
+    with pytest.raises(ApprovalError):  # 다음 단계 결재자가 대신 승인할 수 없다
+        ap.approve(cid, me, "확인", pin=PINS["이규홍"])
+    ap.approve(cid, me, "확인", pin=PINS["박문화"])
     with pytest.raises(ApprovalError):
-        ap.reject(cid, "이규홍", "  ")  # 사유 필수
-    ap.reject(cid, "이규홍", "P#9 OCR 재확인")
+        ap.reject(cid, me, "  ", pin=PINS["이규홍"])  # 사유 필수
+    ap.reject(cid, me, "P#9 OCR 재확인", pin=PINS["이규홍"])
     assert ap.case(cid)["status"] == "REVIEWING"
     assert all(s.decision == "PENDING" for s in ap.steps(cid))
-    ap.submit_review(cid, me)
-    ap.approve(cid, "박문화")
-    assert ap.approve(cid, "이규홍") is None
+    ap.submit_review(cid, me, pin=PINS["김형남"])
+    ap.approve(cid, me, pin=PINS["박문화"])
+    assert ap.approve(cid, me, pin=PINS["이규홍"]) is None
+    log_actors = [(e["actor"], e["action"]) for e in A.AuditLog(org).entries(cid)]
+    assert ("박문화", A.APPROVED) in log_actors and ("이규홍", A.REJECTED) in log_actors
+    assert ("박문화", "본인 확인 실패") in log_actors  # 박문화 단계에 다른 사람 PIN → 실패 기록
+
     assert ap.case(cid)["status"] == "APPROVED"
     until = ap.deliver(cid, me, retention_days=90)
     assert ap.case(cid)["status"] == "DELIVERED" and until
@@ -110,3 +128,33 @@ def test_report_pdf(org, tmp_path, project_copy):
     data = pdf.read_bytes()
     assert data[:4] == b"%PDF" and len(data) > 5000
     assert ap.case(cid)["report_path"] == str(pdf)
+
+
+def test_pin_rules_and_lockout(org):
+    from worker.orgmode.users import AuthError, Users
+
+    u = Users(org)
+    with pytest.raises(PermissionError):
+        u.register("x", "123456", actor="not-admin")
+    with pytest.raises(AuthError):
+        u.register("x", "12ab", actor=current_user())
+    assert u.verify("김형남", PINS["김형남"])
+    for _ in range(5):
+        with pytest.raises(AuthError):
+            u.verify("김형남", "000000")
+    with pytest.raises(AuthError, match="잠겼"):
+        u.verify("김형남", PINS["김형남"])  # 잠금 중에는 맞는 PIN도 거부
+    u.change_pin("박문화", PINS["박문화"], "999999", actor="박문화")
+    assert u.verify("박문화", "999999")
+    row = org.conn.execute("SELECT pin_hash, salt FROM org_user WHERE name='박문화'").fetchone()
+    assert "999999" not in row[0] and len(row[1]) == 32
+    assert all("999999" not in (e["detail"] or "") for e in A.AuditLog(org).entries())
+
+
+def test_submit_requires_assigned_approver(org, tmp_path):
+    me = current_user()
+    ap = Approval(org)
+    cid = ap.create_case("R-9", "§35", "홍", str(tmp_path / "p"), me)  # 기본 결재선(결재자 미지정)
+    ap.record_render(cid, me, "o.mp4", "ab" * 32, 0)
+    with pytest.raises(ApprovalError, match="지정되지 않았"):
+        ap.submit_review(cid, me, pin="111111")

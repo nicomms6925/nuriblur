@@ -45,6 +45,7 @@ DEFAULTS = {
     "watermark_default": "0",
     "offline_mode": "1",
     "admins": "[]",
+    "require_pin": "1",
 }
 
 

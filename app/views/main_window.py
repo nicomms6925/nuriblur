@@ -57,10 +57,13 @@ class FrameFetcher:
         self.busy = True
         stub, md = self.w.worker.stub, self.w.worker.md
         proj = str(job.project_path)
+        # 화면 확대가 크면 원본 해상도로 받아 선명하게
+        z = self.w.stage.canvas.zoom() * self.w.stage.canvas.devicePixelRatioF()
+        max_w = 0 if (job.media and z * job.media.width > 1300) else 1280
 
         def fn():
             def get(masked: bool) -> bytes:
-                req = pb.FrameRequest(project_path=proj, frame=frame, masked=masked, max_width=1280)
+                req = pb.FrameRequest(project_path=proj, frame=frame, masked=masked, max_width=max_w)
                 if masked and profile is not None:
                     req.profile.CopyFrom(profile)
                 return stub.GetFrame(req, metadata=md, timeout=30).jpeg
@@ -108,6 +111,12 @@ class MainWindow(QMainWindow):
         self.fetcher = FrameFetcher(self)
         self.play_timer = QTimer(self)
         self.play_timer.timeout.connect(self._play_tick)
+        self.play_t0 = 0.0
+        self.play_f0 = 0
+        self._zoom_refetch = QTimer(self)
+        self._zoom_refetch.setSingleShot(True)
+        self._zoom_refetch.setInterval(250)
+        self._zoom_refetch.timeout.connect(self.refresh_frame)
         self.org = self.approval = None
         if org_mode:
             from worker.orgmode.approval import Approval
@@ -141,10 +150,15 @@ class MainWindow(QMainWindow):
         self.queue.selected.connect(self.select)
         self.stage = StageView()
         self.stage.canvas.box_clicked.connect(self.toggle_track)
-        self.stage.canvas.rect_drawn.connect(self._manual_rect)
+        self.stage.canvas.rect_drawn.connect(self._on_rect)
         self.stage.seek.connect(self.seek)
         self.stage.step_frame.connect(lambda d: self.seek(self.frame + d))
+        self.stage.step_seconds.connect(lambda sec: self.seek(self.frame + int(round(sec * (self.job.fps() if self.job else 30)))))
         self.stage.play_toggled.connect(self._play)
+        self.stage.stop_clicked.connect(self._stop)
+        self.stage.speed_changed.connect(lambda _: self._play(True) if self.stage.playing else None)
+        self.stage.mask_tool.connect(self._mask_tool_toggled)
+        self.stage.canvas.zoom_changed.connect(lambda _: self._zoom_refetch.start())
         side_frame = QFrame()
         side_frame.setObjectName("side")
         sl = QVBoxLayout(side_frame)
@@ -202,9 +216,21 @@ class MainWindow(QMainWindow):
         self.orgp.make_pdf.connect(self._make_pdf)
         self.orgp.deliver.connect(self._deliver)
         self.orgp.export_log.connect(self._export_log)
-        QShortcut(QKeySequence(Qt.Key_Left), self, lambda: self.seek(self.frame - 1))
-        QShortcut(QKeySequence(Qt.Key_Right), self, lambda: self.seek(self.frame + 1))
-        QShortcut(QKeySequence(Qt.Key_Space), self, lambda: self.stage._toggle_play())
+        self.orgp.register_user.connect(self._register_user)
+        fps = lambda: self.job.fps() if self.job else 30.0  # noqa: E731
+        for keys, fn in (
+            ("Left", lambda: self.seek(self.frame - 1)), ("Right", lambda: self.seek(self.frame + 1)),
+            ("Shift+Left", lambda: self.seek(self.frame - int(fps()))), ("Shift+Right", lambda: self.seek(self.frame + int(fps()))),
+            ("Ctrl+Left", lambda: self.seek(self.frame - int(10 * fps()))),
+            ("Ctrl+Right", lambda: self.seek(self.frame + int(10 * fps()))),
+            ("Home", lambda: self.seek(0)), ("End", lambda: self.seek(10 ** 9)),
+            ("Space", lambda: self.stage._toggle_play()),
+            ("+", lambda: self.stage.canvas.zoom_in()), ("=", lambda: self.stage.canvas.zoom_in()),
+            ("-", lambda: self.stage.canvas.zoom_out()), ("0", lambda: self.stage.canvas.fit()),
+            ("1", lambda: self.stage.canvas.actual_size()),
+            ("Escape", lambda: self.stage.set_mask_tool(False, self.step in (3, 4))),
+        ):
+            QShortcut(QKeySequence(keys), self, fn)
 
     # ------------------------------------------------------------------ 공통
     @property
@@ -239,6 +265,7 @@ class MainWindow(QMainWindow):
         self.stage.show_legend(n in (3, 4))
         self.stage.canvas.draw_mode = False
         self.review.manual_b.setChecked(False)
+        self.stage.set_mask_tool(False, n in (3, 4))
         j = self.job
         if n == 6 and self.org_mode:
             self._refresh_org()
@@ -650,20 +677,39 @@ class MainWindow(QMainWindow):
             self.seek(t.start_f)
 
     def _play(self, on: bool) -> None:
+        """재생 시계: 배속에 맞춰 목표 프레임을 계산하고, 프레임 가져오기가 밀리면 건너뛴다."""
+        import time
+
         if on and self.job:
-            self.play_timer.start(int(1000 / max(self.job.fps(), 1)))
+            if self.frame >= self.job.frames() - 1:
+                self.seek(0)
+            if not self.play_timer.isActive():
+                self.play_start = self.frame
+            self.play_t0 = time.monotonic()
+            self.play_f0 = self.frame
+            self.play_timer.start(max(10, int(1000 / max(self.job.fps() * self.stage.speed_value(), 1))))
         else:
             self.play_timer.stop()
 
     def _play_tick(self) -> None:
+        import time
+
         j = self.job
-        if j is None or self.fetcher.busy:
+        if j is None:
             return
-        if self.frame >= j.frames() - 1:
+        target = self.play_f0 + int((time.monotonic() - self.play_t0) * j.fps() * self.stage.speed_value())
+        if target >= j.frames() - 1:
+            self.seek(j.frames() - 1)
             self.stage.set_playing(False)
             self.play_timer.stop()
             return
-        self.seek(self.frame + 1)
+        if not self.fetcher.busy and target != self.frame:
+            self.seek(target)
+
+    def _stop(self) -> None:
+        """정지: 재생을 멈추고 재생을 시작했던 프레임으로 돌아간다."""
+        self.play_timer.stop()
+        self.seek(getattr(self, "play_start", 0))
 
     def _rebuild_timeline(self) -> None:
         j = self.job
@@ -771,8 +817,75 @@ class MainWindow(QMainWindow):
         self._apply_rules(j)
         self.say(tr("toast.exposure_masked", n=len(exps)))
 
+    def _on_rect(self, r: QRectF) -> None:
+        if self.stage.mask_b.isChecked():
+            self._mask_target(r)
+        else:
+            self._manual_rect(r)
+
+    def _mask_tool_toggled(self, on: bool) -> None:
+        if on:
+            self.review.manual_b.setChecked(False)
+            self.manual_kf = None
+            if self.view_mode != "orig" and self.step == 4:
+                self.review.seg.set_value("orig")
+                self._preview_mode("orig")
+            self.say(tr("toast.mask_tool_on"))
+
+    def _mask_target(self, r: QRectF) -> None:
+        """놓친 객체 지정: 종류를 고르면 워커가 앞뒤로 자동 추적해 전 구간 마스킹 규칙을 만든다."""
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QMenu
+
+        j = self.job
+        if j is None:
+            return
+        menu = QMenu(self)
+        acts = {}
+        for key in ("face", "plate", "other"):
+            acts[menu.addAction(tr(f"tool.track_{key}"))] = (key, True)
+        menu.addSeparator()
+        for key in ("face", "plate"):
+            acts[menu.addAction(tr(f"tool.once_{key}"))] = (key, False)
+        chosen = menu.exec(QCursor.pos())
+        if chosen is None or chosen not in acts:
+            return
+        self.apply_mask_target(r, *acts[chosen])
+
+    def apply_mask_target(self, r: QRectF, cls: str, track: bool) -> None:
+        j = self.job
+        if j is None:
+            return
+        f = self.frame
+        box = [r.x(), r.y(), r.width(), r.height()]
+        if not track:
+            span = 5
+            self._add_mask_rule(j, cls, [[max(0, f - span), *box], [f + span, *box]], f, f)
+            return
+        self.say(tr("toast.tracking"))
+        req = pb.TrackObjectRequest(project_path=str(j.project_path), frame=f,
+                                    box=pb.Box(frame=f, x=box[0], y=box[1], w=box[2], h=box[3]),
+                                    cls=cls, max_frames=int(j.fps() * 20), both_directions=True)
+
+        def done(res):
+            frames = [[b.frame, b.x, b.y, b.w, b.h] for b in res.boxes]
+            self._add_mask_rule(j, cls, frames, res.start_f, res.end_f)
+
+        self.worker.rpc("TrackObject", req, done, lambda m: self.say(tr("toast.error", msg=m[:120])), timeout=600)
+
+    def _add_mask_rule(self, j: JobItem, cls: str, frames: list, a: int, b: int) -> None:
+        j.rules.append({"kind": "manual_box", "payload": {"frames": frames, "cls": cls, "source": "assist"}})
+        if self.approval and j.case_id:
+            self.approval.log_event(j.case_id, self.actor(), A.MANUAL_BOX,
+                                    tr("audit.mask_target", cls=tr(f"cls.{cls}") if cls != "other" else tr("cls.other"),
+                                       a=a, b=b))
+        self._apply_rules(j)
+        self.say(tr("toast.mask_target_added", a=a, b=b, n=len(frames)))
+
     def _manual_mode(self) -> None:
         on = self.review.manual_b.isChecked()
+        if on:
+            self.stage.set_mask_tool(False)
         self.stage.canvas.draw_mode = on
         self.manual_kf = None
         self.review.manual_note.setText(tr("rev.manual_draw1") if on else tr("rev.manual_note"))
@@ -1009,6 +1122,8 @@ class MainWindow(QMainWindow):
         self.orgp.pdf_b.setEnabled(bool(case["output_sha256"]))
         self.orgp.c_wm.setChecked(self.export.watermark.isChecked())
         self.orgp.audit.setPlainText(self._audit_text(j.case_id))
+        users = self.approval.users.list()
+        self.orgp.users_l.setText(tr("org.users_list", names=", ".join(u.name for u in users if u.active) or "-"))
         sb = self.orgp.audit.verticalScrollBar()
         sb.setValue(sb.maximum())
         self.stage.show_report(self._report_html(case, steps))
@@ -1051,6 +1166,30 @@ class MainWindow(QMainWindow):
                 f"<td><span style='color:#6f7785;font-size:10px'>{tr('report.output')}</span><br>{Path(case['output_path'] or '').name} · SHA-256 {sha[:4]}…{sha[-4:]}</td></tr></table>"
                 f"<table width='100%' cellspacing='0' style='margin-top:10px'><tr>{cells}</tr></table>")
 
+    def ask_pin(self, role: str, user: str) -> str | None:
+        """현재 단계 결재자 본인 확인 (테스트에서 교체 가능)."""
+        from PySide6.QtWidgets import QInputDialog, QLineEdit
+
+        pin, ok = QInputDialog.getText(self, tr("org.pin_title"), tr("org.pin_prompt", role=role, user=user or "-"),
+                                       QLineEdit.Password)
+        return pin if ok else None
+
+    def _register_user(self, name: str, pin: str) -> None:
+        from worker.orgmode.users import AuthError
+
+        try:
+            self.approval.users.register(name, pin, actor=self.actor())
+        except PermissionError:
+            self.say(tr("toast.admin_only"))
+            return
+        except AuthError as e:
+            self.say(str(e))
+            return
+        self.orgp.user_name.clear()
+        self.orgp.user_pin.clear()
+        self.say(tr("toast.user_registered", name=name))
+        self._refresh_org()
+
     def _approve(self, comment: str) -> None:
         from worker.orgmode.approval import ApprovalError
 
@@ -1059,14 +1198,21 @@ class MainWindow(QMainWindow):
             return
         try:
             c = self.approval.case(j.case_id)
+            step = self.approval.current_step(j.case_id)
+            pin = ""
+            if self.approval.users.required() and step is not None:
+                got = self.ask_pin(step.role, step.user)
+                if got is None:
+                    return
+                pin = got
             if c["status"] == "REVIEWING":
-                self.approval.submit_review(j.case_id, self.actor(), comment)
+                self.approval.submit_review(j.case_id, self.actor(), comment, pin=pin)
                 if j.s == S.AUDITED:
                     j.state.go(S.PENDING_APPROVAL)
                 self.say(tr("toast.submitted"))
             else:
-                cur = self.approval.current_step(j.case_id)
-                nxt = self.approval.approve(j.case_id, cur.user or self.actor(), comment)
+                cur = step
+                nxt = self.approval.approve(j.case_id, self.actor(), comment, pin=pin)
                 if nxt is None:
                     if j.s == S.PENDING_APPROVAL:
                         j.state.go(S.APPROVED)
@@ -1085,9 +1231,18 @@ class MainWindow(QMainWindow):
         j = self.job
         if j is None or not j.case_id:
             return
-        cur = self.approval.current_step(j.case_id)
+        cur = self.approval.current_step(j.case_id) or self.approval.steps(j.case_id)[-1]
+        if not reason.strip():
+            self.say(tr("toast.need_reason"))
+            return
+        pin = ""
+        if self.approval.users.required():
+            got = self.ask_pin(cur.role, cur.user)
+            if got is None:
+                return
+            pin = got
         try:
-            self.approval.reject(j.case_id, (cur.user if cur else "") or self.actor(), reason)
+            self.approval.reject(j.case_id, self.actor(), reason, pin=pin)
         except ApprovalError as e:
             self.say(str(e))
             return

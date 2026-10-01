@@ -406,6 +406,23 @@ class Service(pbg.NuriBlurWorkerServicer):
         except Exception as e:  # noqa: BLE001
             self._fail(context, e)
 
+    def TrackObject(self, request, context):
+        from worker.pipeline.assist import track_object
+
+        try:
+            p = self._project(request.project_path)
+            b = request.box
+            with p.lock:
+                r = track_object(p, int(request.frame), (b.x, b.y, b.w, b.h), request.cls or "other",
+                                 max_frames=request.max_frames or 300, both=request.both_directions)
+            res = pb.TrackObjectResult(start_f=r["start_f"], end_f=r["end_f"],
+                                       method=",".join(f"{k}:{v}" for k, v in r["methods"].items()))
+            for f, x, y, w, h in r["boxes"]:
+                res.boxes.add(frame=f, x=x, y=y, w=w, h=h, conf=1.0)
+            return res
+        except Exception as e:  # noqa: BLE001
+            self._fail(context, e)
+
     def MatchReference(self, request, context):
         context.abort(grpc.StatusCode.UNIMPLEMENTED, "참조 사진 매칭은 V1(G4-02, 자체 학습 ArcFace) 이후 지원")
 

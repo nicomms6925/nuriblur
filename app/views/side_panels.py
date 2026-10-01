@@ -447,6 +447,7 @@ class OrgPanel(Panel):
     make_pdf = Signal()
     deliver = Signal(int)
     export_log = Signal()
+    register_user = Signal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -491,6 +492,18 @@ class OrgPanel(Panel):
         s.add(label(tr("org.line_note"), "note", wrap=True))
         self.save_b = button(tr("org.line_save"), "", lambda: self.save_line.emit(self.preset.currentData(), self.names.text()))
         s.add(btn_row(self.save_b))
+        s = self.sec(tr("org.users"))
+        self.user_name = QLineEdit()
+        self.user_name.setPlaceholderText(tr("org.user_name_ph"))
+        self.user_pin = QLineEdit()
+        self.user_pin.setEchoMode(QLineEdit.Password)
+        self.user_pin.setPlaceholderText(tr("org.user_pin_ph"))
+        s.add(self.user_name)
+        s.add(self.user_pin)
+        s.add(btn_row(button(tr("org.user_register"), "", lambda: self.register_user.emit(
+            self.user_name.text(), self.user_pin.text()))))
+        self.users_l = label("", "note", wrap=True)
+        s.add(self.users_l)
         s = self.sec(tr("org.steps"))
         self.steps_w = QWidget()
         self.steps_l = QVBoxLayout(self.steps_w)
