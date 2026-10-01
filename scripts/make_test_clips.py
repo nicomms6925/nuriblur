@@ -36,9 +36,20 @@ def _face_patch() -> np.ndarray:
 FACE_IN_PATCH = (20, 21, 30, 38)
 
 
+PLATE_IN_CAR = (89, 72, 70, 15)  # 차량 패치 안 번호판 위치 (x, y, w, h)
+
+
 def _car_patch() -> np.ndarray:
+    """dog.jpg 트럭 + 합성 국내 신형 번호판(12가3456) 부착."""
+    sys.path.insert(0, str(ROOT / "scripts" / "data"))
+    from synth_plates import render_plate
+
     img = cv2.imread(str(ASSETS / "dog.jpg"))
-    return img[78:171, 466:692].copy()
+    car = img[78:171, 466:692].copy()
+    x, y, w, h = PLATE_IN_CAR
+    plate = cv2.cvtColor(render_plate("12가3456", "new_white"), cv2.COLOR_RGB2BGR)
+    car[y:y + h, x:x + w] = cv2.resize(plate, (w, h), interpolation=cv2.INTER_AREA)
+    return car
 
 
 def background(w: int, h: int) -> np.ndarray:
@@ -86,6 +97,7 @@ def make_street(path: Path, seconds: float = 6.0, w: int = 1280, h: int = 720, f
     gt = {"fps": fps, "frames": n, "width": w, "height": h, "objects": []}
     objs = {a[0]: {"id": a[0], "cls": "face", "boxes": {}} for a in actors}
     objs[100] = {"id": 100, "cls": "vehicle", "boxes": {}}
+    objs[200] = {"id": 200, "cls": "plate", "text": "12가3456", "boxes": {}}
     path.parent.mkdir(parents=True, exist_ok=True)
     out = av.open(str(path), "w")
     vs = out.add_stream(codec, rate=fps)
@@ -100,6 +112,9 @@ def make_street(path: Path, seconds: float = 6.0, w: int = 1280, h: int = 720, f
         cx = int(-260 + (w + 300) * i / n)
         paste(fr, car, cx, int(h * 0.68))
         objs[100]["boxes"][str(i)] = [cx, int(h * 0.68), car.shape[1], car.shape[0]]
+        px, py, pw, ph = PLATE_IN_CAR
+        if 0 <= cx + px and cx + px + pw <= w:  # 화면 안에 번호판 전체가 보일 때만 GT
+            objs[200]["boxes"][str(i)] = [cx + px, int(h * 0.68) + py, pw, ph]
         for aid, sc, x0, y0, vx, vy, tin, tout in actors:
             if not (tin <= i < tout):
                 continue

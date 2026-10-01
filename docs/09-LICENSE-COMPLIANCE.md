@@ -33,3 +33,16 @@
 
 ## 고지문 (About 화면·설치 문서)
 오픈소스 목록·라이선스 전문, "본 제품의 번호판 인식 모델은 AI Hub(한국지능정보사회진흥원) 데이터를 활용하여 학습되었습니다."
+
+## 구현 시 추가된 구성요소 (2026-10-01)
+| 구성요소 | 용도 | 라이선스 | 조치 |
+|---|---|---|---|
+| OpenCV Zoo YuNet | 얼굴 검출·재검사 | MIT | manifest 해시 고정 |
+| YOLOX-nano/s COCO 가중치 (Megvii 공식 릴리스) | 전신·차량 | Apache-2.0 | manifest 해시 고정 |
+| RT-DETRv2 번호판 (Topurrra/rtdetr-license-plate-detection-onnx) | 번호판 1차 모델 | Apache-2.0 (base PekingU/rtdetr_v2_r18vd) | 학습 데이터 Open Images V7 — 이미지 CC-BY-2.0, 주석 CC-BY-4.0 → **고지문에 출처 표기** |
+| FFmpeg (BtbN win64 **lgpl-shared** n8.1) | PyAV 동적 링크 | LGPL-2.1+ | `scripts/build/build_lgpl_pyav.ps1`로 빌드, `check_license.py --packaging` 통과 확인 |
+| libopenh264 / kvazaar (FFmpeg LGPL 빌드 포함) | SW H.264 / HEVC 인코더 | BSD-2 / BSD-3 | H.264 특허: 소스 빌드 openh264는 Cisco 특허 라이선스 대상 아님 → HW·OS(Media Foundation) 인코더 우선 사용 |
+| Inno Setup | 설치 파일 빌드 도구 | Inno Setup License | 배포물에 포함되지 않음 |
+| PyInstaller | 패키징 도구 | GPL-2.0 + 부트로더 예외 | 예외 조항으로 상용 배포 가능 |
+
+고지문 추가: "번호판 검출 모델은 Open Images V7(Google, CC-BY-4.0 주석 / CC-BY-2.0 이미지)로 학습된 RT-DETRv2(Apache-2.0)를 사용합니다."

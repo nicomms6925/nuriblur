@@ -3,7 +3,9 @@
 클래스: face / person / plate (+ 내부용 vehicle).
 - 얼굴: YuNet(640×640 고정 입력) — 전체 프레임 1회 + 고해상도 타일(작은 얼굴용)
 - 전신·차량: YOLOX(COCO) — 레터박스
-- 번호판: 전용 모델이 없으면 차량 박스 하단 영역(규칙) → 보수적 마스킹
+- 번호판: ONNX 번호판 모델(RT-DETR)을 전체 화면(plate_every 검출마다)과 차량 영역(차량이 있을 때)에 실행.
+  차량 검출과 무관하게 돌린다 — 작은 차량은 YOLOX-nano가 놓치기 때문.
+  번호판을 찾지 못한 차량은 차량 박스 하단 영역(규칙)으로 보수적 마스킹(deny-by-default).
 """
 from __future__ import annotations
 
@@ -14,7 +16,9 @@ import numpy as np
 
 from worker.models.registry import ModelSpec, Profile, Registry, create_session, default_registry
 
-CONF = {"face": 0.30, "person": 0.35, "plate": 0.25, "vehicle": 0.35}
+# face: 스펙 0.30 → 0.15. 재검사(0.20)보다 낮게 두어 임계 부근에서 깜빡이는 작은 얼굴에 여유(히스테리시스)를 준다
+# (군중 실영상에서 0.2~0.3 얼굴이 대량 노출 — docs/10 열린 질문)
+CONF = {"face": 0.15, "person": 0.35, "plate": 0.25, "vehicle": 0.35}
 NMS_IOU = 0.5
 
 
@@ -158,8 +162,9 @@ class YunetDetector:
         b, s = self._run(img)
         all_b.append(b / r)
         all_s.append(s)
-        # 2) 고해상도 타일 (작은 얼굴)
-        scale = min(self.long_side / max(H, W), 2.0)
+        # 2) 고해상도 타일 (작은 얼굴). 원본보다 줄이지 않는다(군중 속 작은 얼굴 보존) — 단 4K 초과는 2560으로
+        native_cap = min(1.0, 2560 / max(H, W))
+        scale = min(max(self.long_side / max(H, W), native_cap), 2.0) if self.long_side else 0.0
         if max(H, W) * scale > self.size * 1.15:
             big = cv2.resize(bgr, (int(W * scale), int(H * scale)), interpolation=cv2.INTER_LINEAR)
             bh, bw = big.shape[:2]
@@ -186,6 +191,65 @@ class YunetDetector:
         ok = ((boxes[:, 2] - boxes[:, 0]) >= 4) & ((boxes[:, 3] - boxes[:, 1]) >= 4)
         boxes, scores = boxes[ok], scores[ok]
         return [Det("face", float(scores[i]), *map(float, boxes[i])) for i in nms(boxes, scores, 0.4)]
+
+
+class RtdetrPlateDetector:
+    """RT-DETR 번호판 검출 (입력 640×640 고정, RGB/255, NMS 불필요).
+
+    점수가 압축된 단일 클래스 모델이라 manifest의 score_scale로 보정한다.
+    """
+
+    def __init__(self, spec: ModelSpec):
+        self.spec = spec
+        self.sess = create_session(spec)
+        self.input_name = self.sess.get_inputs()[0].name
+        self.size = spec.input_size
+        self.scale = float(spec.extra.get("score_scale", 1.0))
+
+    def __call__(self, bgr: np.ndarray, conf_scale: float = 1.0,
+                 roi: tuple[int, int, int, int] | None = None) -> list[Det]:
+        H, W = bgr.shape[:2]
+        x0, y0, x1, y1 = roi or (0, 0, W, H)
+        crop = bgr[y0:y1, x0:x1]
+        if crop.size == 0:
+            return []
+        ch, cw = crop.shape[:2]
+        x = cv2.resize(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB), (self.size, self.size), interpolation=cv2.INTER_LINEAR)
+        x = (x.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
+        logits, boxes = self.sess.run(None, {self.input_name: x})
+        sc = np.clip(1.0 / (1.0 + np.exp(-logits[0, :, 0])) * self.scale, 0, 1)
+        m = sc >= CONF["plate"] * conf_scale
+        if not m.any():
+            return []
+        b = boxes[0][m]
+        xyxy = np.stack([(b[:, 0] - b[:, 2] / 2) * cw + x0, (b[:, 1] - b[:, 3] / 2) * ch + y0,
+                         (b[:, 0] + b[:, 2] / 2) * cw + x0, (b[:, 1] + b[:, 3] / 2) * ch + y0], 1)
+        s = sc[m]
+        out = []
+        for i in nms(xyxy, s, 0.5):
+            x1, y1, x2, y2 = map(float, xyxy[i])
+            w, h = x2 - x1, y2 - y1
+            # RT-DETR이 가끔 내는 화면 크기 박스 제거: 번호판일 수 없는 크기·종횡비
+            # 국내 번호판 종횡비: 신형 4.7 · 구형/2단 약 2 · 이륜차 약 1.5 → 1.2 미만(정사각형에 가까움)은 제외
+            if w <= 2 or h <= 2 or w > 0.3 * W or h > 0.3 * H or not (1.2 <= w / h <= 8.0):
+                continue
+            out.append(Det("plate", float(s[i]), max(0.0, x1), max(0.0, y1), min(float(W), x2), min(float(H), y2)))
+        return out
+
+
+def vehicle_roi(vehicles: list[Det], W: int, H: int, pad: float = 0.1) -> tuple[int, int, int, int]:
+    x1 = min(v.x1 for v in vehicles)
+    y1 = min(v.y1 for v in vehicles)
+    x2 = max(v.x2 for v in vehicles)
+    y2 = max(v.y2 for v in vehicles)
+    px, py = (x2 - x1) * pad, (y2 - y1) * pad
+    return max(0, int(x1 - px)), max(0, int(y1 - py)), min(W, int(x2 + px)), min(H, int(y2 + py))
+
+
+def _inside(p: Det, v: Det) -> bool:
+    ix = max(0.0, min(p.x2, v.x2) - max(p.x1, v.x1))
+    iy = max(0.0, min(p.y2, v.y2) - max(p.y1, v.y1))
+    return ix * iy >= 0.6 * max((p.x2 - p.x1) * (p.y2 - p.y1), 1e-6)
 
 
 def plates_from_vehicles(vehicles: list[Det]) -> list[Det]:
@@ -218,14 +282,23 @@ class DetectorSet:
         self.face = YunetDetector(self.face_spec, profile.face_long_side) if "face" in self.classes else None
         need_obj = bool({"person", "plate"} & self.classes)
         self.obj = YoloxDetector(self.object_spec) if need_obj else None
-        if self.plate_spec.arch != "rule_vehicle_lower":
-            raise NotImplementedError("번호판 ONNX 모델 연결은 G4-01에서 구현")
+        self.plate = None
+        if "plate" in self.classes and self.plate_spec.arch == "rtdetr":
+            self.plate = RtdetrPlateDetector(self.plate_spec)
+            if profile.plate_fallback:
+                reg.get(profile.plate_fallback)  # 라이선스 검증
+        elif "plate" in self.classes and self.plate_spec.arch != "rule_vehicle_lower":
+            raise NotImplementedError(f"지원하지 않는 번호판 모델 구조: {self.plate_spec.arch}")
+        self.fallback = self.plate is None or bool(profile.plate_fallback)
+        self.plate_every = max(1, int(profile.plate_every or 1))
+        self._calls = 0
 
     @property
     def plate_audit_capable(self) -> bool:
         return self.plate_spec.audit_capable
 
     def __call__(self, bgr: np.ndarray, conf_scale: float = 1.0) -> list[Det]:
+        self._calls += 1
         dets: list[Det] = []
         if self.face is not None:
             dets += self.face(bgr, conf_scale)
@@ -234,5 +307,43 @@ class DetectorSet:
             if "person" in self.classes:
                 dets += [d for d in od if d.cls == "person"]
             if "plate" in self.classes:
-                dets += plates_from_vehicles([d for d in od if d.cls == "vehicle"])
+                vehicles = [d for d in od if d.cls == "vehicle"]
+                plates = self.plates(bgr, vehicles, conf_scale)
+                # 1차 번호판 모델은 얼굴도 번호판으로 잡는다 → 얼굴 검출과 겹치는 번호판은 버린다
+                # (그 얼굴은 얼굴 트랙으로 마스킹되고, 보호된 얼굴이 가짜 번호판 마스크에 가려지지 않게)
+                faces = [d for d in dets if d.cls == "face"]
+                if faces:
+                    fb = np.array([[f.x1, f.y1, f.x2, f.y2] for f in faces])
+                    pb = np.array([[q.x1, q.y1, q.x2, q.y2] for q in plates]).reshape(-1, 4)
+                    from worker.pipeline.track import iou_matrix
+
+                    ov = iou_matrix(pb, fb).max(1) if len(pb) else np.zeros(0)
+
+                    def holds_face(q) -> bool:  # 번호판 박스가 얼굴의 절반 이상을 품음
+                        for f in faces:
+                            ix = max(0.0, min(q.x2, f.x2) - max(q.x1, f.x1))
+                            iy = max(0.0, min(q.y2, f.y2) - max(q.y1, f.y1))
+                            if ix * iy >= 0.5 * (f.x2 - f.x1) * (f.y2 - f.y1):
+                                return True
+                        return False
+
+                    plates = [q for q, o in zip(plates, ov, strict=True) if o < 0.3 and not holds_face(q)]
+                dets += plates
         return dets
+
+    def plates(self, bgr: np.ndarray, vehicles: list[Det], conf_scale: float = 1.0, full: bool | None = None) -> list[Det]:
+        if self.plate is None:
+            return plates_from_vehicles(vehicles)
+        H, W = bgr.shape[:2]
+        found: list[Det] = []
+        if full if full is not None else (self._calls - 1) % self.plate_every == 0:
+            found += self.plate(bgr, conf_scale)
+        if vehicles:
+            found += self.plate(bgr, conf_scale, roi=vehicle_roi(vehicles, W, H))
+        if len(found) > 1:
+            b = np.array([[d.x1, d.y1, d.x2, d.y2] for d in found])
+            found = [found[i] for i in nms(b, np.array([d.conf for d in found]), 0.5)]
+        if not self.fallback:
+            return found
+        missing = [v for v in vehicles if not any(_inside(p, v) for p in found)]
+        return found + plates_from_vehicles(missing)

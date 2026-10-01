@@ -57,6 +57,8 @@ class Profile:
     plate: str
     detect_interval: int
     face_long_side: int
+    plate_fallback: str = ""   # 번호판 모델이 못 찾은 차량에 쓰는 규칙 모델
+    plate_every: int = 1       # 번호판 모델 전체 화면 실행 주기(검출 프레임 기준)
 
 
 def _sha256(path: Path) -> str:

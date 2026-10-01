@@ -8,6 +8,9 @@
 
 #define AppName "NuriBlur"
 #define AppVersion "0.1.0"
+#ifndef DistDir
+  #define DistDir "..\.build\dist\NuriBlur"
+#endif
 #ifdef OFFLINE
   #define Edition "org"
   #define Suffix "-offline"
@@ -24,6 +27,7 @@ AppPublisher=NuriBlur
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 OutputBaseFilename=NuriBlur-{#AppVersion}{#Suffix}-setup
+OutputDir=..\.build\installer
 Compression=lzma2/ultra64
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -37,7 +41,7 @@ LicenseFile=..\docs\09-LICENSE-COMPLIANCE.md
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 
 [Files]
-Source: "..\dist\NuriBlur\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Dirs]
 ; 기관 DB(org.sqlite)는 설치 단위로 ProgramData에. 사용자는 읽기/쓰기, 감사 로그 무결성은 해시 체인+트리거로 보장

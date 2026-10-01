@@ -24,7 +24,7 @@ from worker.errors import EncoderError
 GPL_ENCODERS = {"libx264", "libx264rgb", "libx265", "libxvid", "libxavs", "libxavs2", "libvidstab"}
 CANDIDATES = {
     "h264": ["h264_nvenc", "h264_qsv", "h264_amf", "h264_mf", "libopenh264", "mpeg4"],
-    "hevc": ["hevc_nvenc", "hevc_qsv", "hevc_amf", "hevc_mf"],
+    "hevc": ["hevc_nvenc", "hevc_qsv", "hevc_amf", "hevc_mf", "libkvazaar"],  # kvazaar: BSD-3
 }
 NV12_ENCODERS = ("_mf", "_qsv")
 MP4_AUDIO_OK = {"aac", "mp3", "ac3", "eac3", "alac", "opus", "flac"}
