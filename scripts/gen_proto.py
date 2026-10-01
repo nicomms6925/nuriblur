@@ -17,6 +17,12 @@ TARGETS = [ROOT / "worker" / "pb", ROOT / "app" / "pb"]
 def main() -> int:
     from grpc_tools import protoc
 
+    for s in (sys.stdout, sys.stderr):
+        try:
+            s.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+
     for out in TARGETS:
         out.mkdir(parents=True, exist_ok=True)
         rc = protoc.main([

@@ -4,6 +4,10 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: windows-latest
+    env:
+      # 러너 콘솔 기본 인코딩(cp1252)은 한글 출력에서 실패한다
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
         with:
