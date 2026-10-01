@@ -154,6 +154,21 @@ def cmd_audit(a) -> int:
     return EXIT_EXPOSURE if ex else EXIT_OK
 
 
+def cmd_dismiss(a) -> int:
+    import getpass
+
+    from worker.io.project import Project
+    from worker.pipeline.dismiss import dismiss, refusal
+
+    with Project.open(a.project) as p:
+        last = json.loads(p.get_meta("last_audit") or "{}").get("exposures", [])
+        pick = [e for e in last if not refusal(e)] if a.all else [last[i] for i in _ids(a.index) if 0 <= i < len(last)]
+        r = dismiss(p, a.output, pick, a.actor or getpass.getuser(), a.reason)
+    print(json.dumps({"accepted": len(r["accepted"]), "refused": r["refused"], "remaining": r["remaining"]},
+                     ensure_ascii=False))
+    return EXIT_OK if r["remaining"] == 0 else EXIT_EXPOSURE
+
+
 def cmd_worker(a) -> int:
     from worker.server import main as server_main
 
@@ -195,6 +210,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--reset", action="store_true", help="기존 규칙 삭제")
     s.add_argument("--mask-exposures", action="store_true", help="마지막 재검사 노출 영역을 수동 박스로 마스킹")
     s.set_defaults(fn=cmd_rules)
+
+    s = sub.add_parser("dismiss", help="재검사 오탐 확인('노출 아님') — 신뢰도 0.5 미만 얼굴·번호판만")
+    s.add_argument("project")
+    s.add_argument("-o", "--output", required=True, help="최근 재검사한 출력본")
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--index", help="최근 재검사 노출 목록의 순번 (0부터, 쉼표)")
+    g.add_argument("--all", action="store_true", help="확인 가능한 노출 전부")
+    s.add_argument("--reason", required=True, help="확인 사유 (기록됨)")
+    s.add_argument("--actor", help="확인자 (기본: Windows 계정)")
+    s.set_defaults(fn=cmd_dismiss)
 
     s = sub.add_parser("render")
     s.add_argument("project")

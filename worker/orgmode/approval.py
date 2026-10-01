@@ -152,6 +152,17 @@ class Approval:
         self.log.append(actor, A.RENDERED, output_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1],
                         {"sha256": sha256, "audit_exposures": exposures}, cid)
 
+    def record_dismissal(self, cid: str, actor: str, items: list[dict], reason: str, remaining: int) -> None:
+        """검수자가 재검사 검출을 '노출 아님'으로 확인 → 남은 노출 수 갱신 + 감사 로그(프레임·위치·신뢰도·사유)."""
+        with self.db.lock:
+            self.db.conn.execute("UPDATE case_file SET audit_exposures=? WHERE id=?", (remaining, cid))
+        self.log.append(actor, A.EXPOSURE_DISMISSED, f"{len(items)}건",
+                        {"reason": reason, "remaining": remaining,
+                         "items": [{"frame": int(i["frame"]), "cls": i.get("cls", "face"),
+                                    "conf": round(float(i.get("conf", 0)), 3),
+                                    "box": [round(float(i[k]), 1) for k in ("x", "y", "w", "h")]} for i in items[:200]]},
+                        cid)
+
     # ---------- 결재 ----------
     def submit_review(self, cid: str, actor: str, comment: str = "", pin: str = "") -> None:
         """1단계(담당자 검수) 완료 = 승인 요청."""

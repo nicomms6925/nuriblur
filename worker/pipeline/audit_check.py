@@ -22,6 +22,10 @@
 또한 1차 번호판 모델은 무늬 없는 사각형(창문·간판·모자이크)도 잡으므로, 박스 안에 글자 획처럼
 고대비 세로 전이가 있어야만(text_like) 노출로 센다 — 글자가 보이지 않는 번호판은 식별 불가.
 CPU 비용을 줄이려고 번호판 마스크가 있는 프레임(그 영역)과 PLATE_FULL_EVERY 프레임마다 전체 화면만 본다.
+
+식별 불가 소형 얼굴: 폭 AUDIT_MIN_FACE_PX 미만 얼굴은 노출로 세지 않는다(결정 2026-10-02, docs/10).
+분석·마스킹은 크기와 무관하게 그대로 하고, 재검사 판정에서만 뺀다. 제외 건수는 small_faces로 따로 보고한다.
+검수자가 '노출 아님'으로 확인한 검출(worker.pipeline.dismiss)은 같은 자리 재검출도 세지 않는다.
 """
 from __future__ import annotations
 
@@ -34,6 +38,7 @@ from worker.jobs import Emit, JobControl, Throttle, event
 from worker.models.registry import Registry, default_registry
 from worker.pipeline.decode import iter_frames
 from worker.pipeline.detect import CONF, RtdetrPlateDetector, YunetDetector
+from worker.pipeline.dismiss import DismissIndex
 from worker.pipeline.mask import MaskPlan, Region, RenderProfile, apply_masks
 
 AUDIT_CONF = 0.2
@@ -44,6 +49,7 @@ MIN_CHANGE = 4.0
 MISSING_RATIO = 0.4
 PLATE_AUDIT_CONF = 0.2   # 보정 점수 기준(원점수 0.04), 분석 0.25보다 민감
 PLATE_FULL_EVERY = 30
+AUDIT_MIN_FACE_PX = 16   # 원본 픽셀 기준 얼굴 폭. 이보다 작으면 식별 불가로 보고 재검사 노출에서 제외
 NEUTRAL = 128
 
 
@@ -212,8 +218,12 @@ def protected_near(plan: MaskPlan, frame: int, window: int) -> list[tuple[float,
 def audit(output_path: str | Path, plan: MaskPlan, job_id: str = "", ctl: JobControl | None = None,
           emit: Emit | None = None, total: int = 0, stride: int = 1, face_long_side: int = 960,
           pad_frames: int = 5, src_path: str | Path | None = None, profile: RenderProfile | None = None,
-          plate_model: str = "", registry: Registry | None = None) -> list[dict[str, Any]]:
+          plate_model: str = "", registry: Registry | None = None,
+          dismissed: DismissIndex | None = None, stats: dict[str, int] | None = None) -> list[dict[str, Any]]:
+    """stats(선택)에 small_faces(소형 얼굴 제외)·dismissed(확인된 오탐 제외) 건수를 채운다."""
     reg = registry or default_registry()
+    dismissed = dismissed or DismissIndex()
+    small = 0
     face = YunetDetector(reg.get("face_yunet_2023mar"), face_long_side)
     plate = None
     if plate_model:
@@ -251,13 +261,21 @@ def audit(output_path: str | Path, plan: MaskPlan, job_id: str = "", ctl: JobCon
                     continue
                 if core_covered(box, regions):  # 얼굴 중심부가 이미 가려짐(옆모습 머리 윤곽 재검출 등)
                     continue
+                if d.x2 - d.x1 < AUDIT_MIN_FACE_PX:
+                    small += 1
+                    continue
+                if dismissed.match(fr.index, "face", box):
+                    continue
                 exposures.append({"frame": fr.index, "cls": "face", "x": d.x1, "y": d.y1,
                                   "w": d.x2 - d.x1, "h": d.y2 - d.y1, "conf": d.conf})
             if plate is not None:
-                exposures += _audit_plates(plate, p_scale, fr, regions, plan, pad_frames, stride)
+                exposures += [e for e in _audit_plates(plate, p_scale, fr, regions, plan, pad_frames, stride)
+                              if not dismissed.match(fr.index, "plate", (e["x"], e["y"], e["x"] + e["w"], e["y"] + e["h"]))]
         if emit and prog.ready():
             emit(event("progress", job_id, stage="audit", frame=fr.index + 1, total=total))
     if total and n_out != total:
         exposures.append({"frame": n_out, "cls": "frame_count", "x": 0, "y": 0, "w": 0, "h": 0,
                           "conf": 1.0, "detail": f"출력 프레임 수 {n_out} ≠ 원본 {total}"})
+    if stats is not None:
+        stats.update(small_faces=small, dismissed=dismissed.hits)
     return exposures

@@ -24,7 +24,7 @@ from app import theme
 from app.i18n import tr
 from app.widgets.common import button, label
 
-STATUS_COLOR = {"protect": theme.PROTECT, "mask": theme.MASK, "review": theme.REVIEW}
+STATUS_COLOR = {"protect": theme.PROTECT, "mask": theme.MASK, "review": theme.REVIEW, "exposure": theme.DANGER}
 
 
 def timecode(frame: int, fps: float, with_frames: bool = True) -> str:
@@ -43,12 +43,14 @@ class BoxItem(QGraphicsRectItem):
         pen = QPen(c, 2.0 / scale)
         if status == "review":
             pen.setStyle(Qt.DashLine)
+        elif status == "exposure":  # 재검사 노출 위치(검수 '보기')
+            pen.setWidthF(3.0 / scale)
         self.setPen(pen)
         self.setBrush(Qt.NoBrush)
         self.setCursor(Qt.PointingHandCursor)
         self.setAcceptHoverEvents(True)
         self.setFlag(QGraphicsItem.ItemIsSelectable, False)
-        text = tag + (" ✓" if status == "protect" else " ?" if status == "review" else "")
+        text = tag + (" ✓" if status == "protect" else " ?" if status == "review" else " !" if status == "exposure" else "")
         f = QFont(theme.mono_family())
         f.setPixelSize(max(8, int(10 / scale)))
         f.setBold(True)

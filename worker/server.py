@@ -423,6 +423,25 @@ class Service(pbg.NuriBlurWorkerServicer):
         except Exception as e:  # noqa: BLE001
             self._fail(context, e)
 
+    def DismissExposures(self, request, context):
+        from worker.pipeline.dismiss import dismiss
+
+        try:
+            p = self._project(request.project_path)
+            out = self.guard.check(request.output_path)
+            items = [{"frame": b.frame, "cls": c, "x": b.x, "y": b.y, "w": b.w, "h": b.h}
+                     for b, c in zip(request.items, request.classes, strict=True)]
+            with p.lock:
+                r = dismiss(p, out, items, request.actor, request.reason)
+            res = pb.DismissResult(accepted=len(r["accepted"]), refused=len(r["refused"]), remaining=r["remaining"])
+            for a in r["accepted"]:
+                res.accepted_items.add(frame=a["frame"], x=a["x"], y=a["y"], w=a["w"], h=a["h"], conf=a["conf"])
+            return res
+        except ValueError as e:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(e))
+        except Exception as e:  # noqa: BLE001
+            self._fail(context, e)
+
     def MatchReference(self, request, context):
         context.abort(grpc.StatusCode.UNIMPLEMENTED, "참조 사진 매칭은 V1(G4-02, 자체 학습 ArcFace) 이후 지원")
 

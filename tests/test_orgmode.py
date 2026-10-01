@@ -158,3 +158,20 @@ def test_submit_requires_assigned_approver(org, tmp_path):
     ap.record_render(cid, me, "o.mp4", "ab" * 32, 0)
     with pytest.raises(ApprovalError, match="지정되지 않았"):
         ap.submit_review(cid, me, pin="111111")
+
+
+def test_dismissal_logged_and_unlocks_review(org, tmp_path):
+    """재검사 오탐 확인 → 감사 로그(사유·위치) + 남은 노출 0이면 검수 완료 가능."""
+    me = current_user()
+    ap = Approval(org)
+    ap.save_line(Approval.preset(3, ["김형남", "박문화", "이규홍"]), actor=me)
+    cid = ap.create_case("R-2", "§35", "홍", str(tmp_path / "p.nbproj"), me)
+    ap.record_render(cid, me, str(tmp_path / "o.mp4"), "cd" * 32, exposures=2)
+    items = [{"frame": 3, "cls": "face", "x": 1, "y": 2, "w": 10, "h": 12, "conf": 0.3}]
+    ap.record_dismissal(cid, me, items, "노면 반사", remaining=1)
+    with pytest.raises(ApprovalError):
+        ap.submit_review(cid, me, pin=PINS["김형남"])
+    ap.record_dismissal(cid, me, items, "간판", remaining=0)
+    ap.submit_review(cid, me, pin=PINS["김형남"])
+    e = [x for x in A.AuditLog(org).entries(cid) if x["action"] == A.EXPOSURE_DISMISSED]
+    assert len(e) == 2 and "노면 반사" in e[0]["detail"] and A.AuditLog(org).verify()[0]

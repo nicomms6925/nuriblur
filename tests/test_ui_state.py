@@ -29,10 +29,12 @@ def test_reject_goes_back_to_review_and_rerender():
     j.go(S.REVIEWING)  # 재검사 노출 → 검수
 
 
-def test_audited_only_from_rendering():
-    j = JobState(S.REVIEWING)
-    with pytest.raises(InvalidTransition):
-        j.go(S.AUDITED)
+def test_audited_only_from_rendering_or_dismissal():
+    # REVIEWING → AUDITED 는 남은 재검사 노출을 모두 '오탐 확인'했을 때만 (결정 2026-10-02)
+    JobState(S.REVIEWING).go(S.AUDITED)
+    for s in (S.RULES_APPLIED, S.ANALYZED):  # 출력 없이(규칙만 바꾼 상태에서) 통과 불가
+        with pytest.raises(InvalidTransition):
+            JobState(s).go(S.AUDITED)
     with pytest.raises(InvalidTransition):
         JobState(S.ANALYZED).go(S.PENDING_APPROVAL)
 

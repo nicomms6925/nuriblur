@@ -28,7 +28,15 @@ from app.pb import nuriblur_pb2 as pb
 from app.session import JobItem
 from app.state.machine import STEP_OF, S
 from app.views.queue_panel import QueuePanel
-from app.views.side_panels import ExportPanel, InputPanel, MonitorPanel, OrgPanel, ProtectPanel, ReviewPanel
+from app.views.side_panels import (
+    ExportPanel,
+    InputPanel,
+    MonitorPanel,
+    OrgPanel,
+    ProtectPanel,
+    ReviewPanel,
+    btn_row,
+)
 from app.views.stage_view import StageView, timecode
 from app.views.timeline import Lane, TimelinePanel
 from app.views.topbar import TopBar
@@ -645,10 +653,16 @@ class MainWindow(QMainWindow):
                 st = j.status_of(t.id)
                 items.append((t.id, j.tag(t), st, QRectF(b.x, b.y, b.w, b.h)))
                 rows.append(self._track_row(j, j.tracks[t.id], st))
-            self.stage.canvas.set_boxes(items)
+            self.stage.canvas.set_boxes(items + self._exposure_box(frame))
             self.protect.set_rows(rows)
         else:
-            self.stage.canvas.set_boxes([])
+            self.stage.canvas.set_boxes(self._exposure_box(frame))
+
+    def _exposure_box(self, frame: int) -> list:
+        f = getattr(self, "exp_focus", None)
+        if f is None or f[0] != frame or self.step != 4:
+            return []
+        return [(-1, tr("rev.exposure"), "exposure", f[1])]
 
     def _track_row(self, j: JobItem, t: pb.Track, st: str) -> TrackRowW:
         fps = j.fps()
@@ -749,13 +763,22 @@ class MainWindow(QMainWindow):
             return
         items = []
         if j.exposures:
-            b = button(tr("rev.mask_all"), "", lambda: self._mask_exposure(-1))
+            n_low = sum(1 for e in j.exposures if e.get("dismissable"))
+            head = [button(tr("rev.mask_all"), "", lambda: self._mask_exposure(-1))]
+            if n_low:
+                head.append(button(tr("rev.dismiss_all", n=n_low), "", lambda: self._dismiss_exposure(-1)))
             items.append((f"<span style='color:#E5534B'>{tr('rev.exposures', n=len(j.exposures))}</span>",
-                          tr("rev.exposures_desc"), b"", b))
+                          tr("rev.exposures_desc"), b"", btn_row(*head)))
             for i, e in enumerate(j.exposures[:30]):
-                bb = button(tr("rev.mask"), "", lambda _=False, k=i: self._mask_exposure(k))
-                kind = tr("rev.exp_missing") if e["cls"] == "mask_missing" else tr("rev.exp_face", c=e.get("conf", 0))
-                items.append((f"{tr('rev.exposure')} · f{e['frame']}", kind, b"", bb))
+                row = [button(tr("rev.view"), "", lambda _=False, k=i: self._view_exposure(k)),
+                       button(tr("rev.mask"), "", lambda _=False, k=i: self._mask_exposure(k))]
+                if e.get("dismissable"):
+                    row.append(button(tr("rev.dismiss"), "", lambda _=False, k=i: self._dismiss_exposure(k)))
+                kind = {"mask_missing": tr("rev.exp_missing"), "frame_count": tr("rev.exp_frames"),
+                        "plate": tr("rev.exp_plate", c=e.get("conf", 0))}.get(e["cls"], tr("rev.exp_face", c=e.get("conf", 0)))
+                if e["cls"] in ("face", "plate") and not e.get("dismissable"):
+                    kind += tr("rev.exp_locked")
+                items.append((f"{tr('rev.exposure')} · f{e['frame']}", kind, b"", btn_row(*row)))
         for s in j.suggestions:
             a, b = j.tracks.get(s.to_id), j.tracks.get(s.from_id)
             if not a or not b or b.merged_into:
@@ -816,6 +839,65 @@ class MainWindow(QMainWindow):
             self.approval.log_event(j.case_id, self.actor(), A.MANUAL_BOX, tr("log.exposure_masked", n=len(exps)))
         self._apply_rules(j)
         self.say(tr("toast.exposure_masked", n=len(exps)))
+
+    def _view_exposure(self, idx: int) -> None:
+        """재검사 노출 위치로 이동해 출력(마스킹) 화면에 빨간 박스로 표시."""
+        j = self.job
+        if j is None or idx >= len(j.exposures):
+            return
+        e = j.exposures[idx]
+        self.exp_focus = (int(e["frame"]), QRectF(e["x"], e["y"], e["w"], e["h"]))
+        if self.view_mode == "orig":
+            self.review.seg.set_value("mask")
+            self.view_mode = "mask"
+            self.stage.mode.setText(tr("view.masked"))
+        self.seek(int(e["frame"]))
+
+    def ask_dismiss_reason(self, n: int) -> str | None:
+        """오탐 확인 사유 입력 (테스트에서 교체 가능)."""
+        from PySide6.QtWidgets import QInputDialog
+
+        text, ok = QInputDialog.getText(self, tr("rev.dismiss_title"), tr("rev.dismiss_reason", n=n))
+        return text.strip() if ok and text.strip() else None
+
+    def _dismiss_exposure(self, idx: int) -> None:
+        """검수자가 '노출 아님' 확인 → 워커가 검증·기록, 남은 노출이 0이면 재검사 통과로 인정."""
+        j = self.job
+        if j is None or not j.output_path:
+            return
+        exps = [e for e in (j.exposures if idx < 0 else [j.exposures[idx]]) if e.get("dismissable")]
+        if not exps:
+            return
+        reason = self.ask_dismiss_reason(len(exps))
+        if reason is None:
+            return
+        req = pb.DismissRequest(project_path=str(j.project_path), output_path=str(j.output_path),
+                                classes=[e["cls"] for e in exps], actor=self.actor(), reason=reason)
+        for e in exps:
+            req.items.add(frame=int(e["frame"]), x=e["x"], y=e["y"], w=e["w"], h=e["h"], conf=e.get("conf", 0.0))
+
+        def done(res: pb.DismissResult) -> None:
+            acc = {(b.frame, round(b.x, 1), round(b.y, 1)) for b in res.accepted_items}
+            gone = [e for e in exps if (int(e["frame"]), round(e["x"], 1), round(e["y"], 1)) in acc]
+            j.exposures = [e for e in j.exposures if not any(e is g for g in gone)]
+            j.last_exposures = res.remaining
+            if self.approval and j.case_id and res.accepted:
+                self.approval.record_dismissal(j.case_id, self.actor(), gone, reason, res.remaining)
+            if res.refused:
+                self.say(tr("toast.dismiss_refused", n=res.refused))
+            if res.remaining == 0 and j.s == S.REVIEWING:  # 규칙을 바꿨다면(마스킹) 다시 내보내야 한다
+                j.exposures = []
+                j.state.go(S.AUDITED)
+                self.monitor.stage.setText(tr("mon.audit_pass"))
+                self._refresh_queue(j)
+                self.say(tr("toast.dismiss_pass", n=res.accepted))
+                if self.org_mode:
+                    QTimer.singleShot(900, lambda: self.go(6))
+            else:
+                self.say(tr("toast.dismissed", n=res.accepted, r=res.remaining))
+            self._refresh_review()
+
+        self.worker.rpc("DismissExposures", req, done, lambda m: self.say(m))
 
     def _on_rect(self, r: QRectF) -> None:
         if self.stage.mask_b.isChecked():

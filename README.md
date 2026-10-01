@@ -33,6 +33,7 @@ uv run python -m app.main
 | 배속 | 0.25× ~ 4× (느리면 프레임을 건너뛰어 실제 시간에 맞춤) |
 | 프레임 번호로 이동 | "프레임" 입력칸, 슬라이더, 타임라인 클릭·드래그, Shift+휠 |
 | 확대·축소 / 맞춤 / 원본 크기 | 휠 · + − / 맞춤 · 0 / 원본 · 1 (확대 시 드래그로 이동) |
+| 재검사 노출 확인 | 검수 목록의 "보기"(출력 화면에 빨간 박스) → "마스킹" 또는 "노출 아님"(사유 입력·감사 로그, 신뢰도 0.5 미만만). 남은 노출 0건이면 통과 |
 | 놓친 얼굴·번호판 가리기 | "＋ 마스킹 대상 지정" → 드래그 → 얼굴/번호판/기타 선택 → 앞뒤 자동 추적해 전 구간 마스킹 (Esc 취소) |
 
 ## CLI (헤드리스)
@@ -45,7 +46,12 @@ uv run nuriblur rules case.nbproj --protect 3,7
 ```bash
 uv run nuriblur render case.nbproj -o out.mp4 --audit
 ```
-종료 코드: 0 성공 · 3 재검사 노출 · 4 모델 라이선스/해시 오류. 노출이 나오면 `rules case.nbproj --mask-exposures` 후 다시 render.
+종료 코드: 0 성공 · 3 재검사 노출 · 4 모델 라이선스/해시 오류. 노출이 나오면 `rules case.nbproj --mask-exposures` 후 다시 render,
+오탐이면 확인 기록 후 통과(신뢰도 0.5 미만 얼굴·번호판만):
+```bash
+uv run nuriblur dismiss case.nbproj -o out.mp4 --all --reason "노면 반사"
+```
+- 재검사는 폭 16px 미만 얼굴(식별 불가)을 노출로 세지 않는다(마스킹은 그대로).
 
 ## 테스트·회귀
 ```bash

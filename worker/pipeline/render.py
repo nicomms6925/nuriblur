@@ -16,8 +16,9 @@ from worker.jobs import Emit, JobControl, Throttle, event
 from worker.models.registry import Registry, default_registry
 from worker.pipeline import rules as rules_mod
 from worker.pipeline.analyze import preview_jpeg
-from worker.pipeline.audit_check import audit
+from worker.pipeline.audit_check import AUDIT_MIN_FACE_PX, audit
 from worker.pipeline.decode import DecoderThread
+from worker.pipeline.dismiss import DismissIndex, dismissals, refusal
 from worker.pipeline.encode import VideoWriter
 from worker.pipeline.mask import RenderProfile, Watermark, apply_masks, plan_for_project
 from worker.pipeline.probe import sha256_file
@@ -97,22 +98,29 @@ def render(project_path: str | Path, output_path: str | Path, profile: dict[str,
             stride = int(project.get_meta("detect_interval") or 1)
             aprof = reg.profile(project.get_meta("profile") or "cpu")
             plate_model = aprof.plate if "plate" in (project.get_meta("classes") or "plate") else ""
+            astats: dict[str, int] = {}
             exposures = audit(output_path, plan, job_id, ctl, emit, total=total, stride=stride,
                               face_long_side=aprof.face_long_side, pad_frames=prof.pad_frames, src_path=src,
-                              profile=prof, plate_model=plate_model, registry=reg)
+                              profile=prof, plate_model=plate_model, registry=reg,
+                              dismissed=DismissIndex(dismissals(project)), stats=astats)
             audited = True
+            if astats.get("small_faces") or astats.get("dismissed"):
+                emit(event("log", job_id, stage="audit",
+                           message=f"재검사 제외: 식별 불가 소형 얼굴(폭<{AUDIT_MIN_FACE_PX}px) {astats.get('small_faces', 0)}건 · "
+                                   f"검수자 확인 오탐 {astats.get('dismissed', 0)}건"))
         status = ("AUDITED" if not exposures else "REVIEWING") if audited else "RENDERED"
         project.upsert_job(job_id, "render", status=status, output_path=str(output_path), output_sha256=digest,
                            audit_exposures=len(exposures) if audited else -1,
                            ended_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
                            stats={"render_fps": round(render_fps, 2), "frames": n, "encoder": writer.encoder,
                                   "mask_tracks": counts})
-        project.set_meta("last_audit", json.dumps({"output": str(output_path), "exposures": exposures[:500]},
-                                                  ensure_ascii=False))
+        project.set_meta("last_audit", json.dumps({"output": str(output_path), "exposures": exposures[:500],
+                                                   "count": len(exposures)}, ensure_ascii=False))
         project.save(reg.model_hashes())
         for e in exposures[:200]:  # 검수 목록용 (UI)
             emit(event("exposure", job_id, stage="audit", frame=e["frame"], code=e["cls"],
-                       message=json.dumps({k: e[k] for k in ("x", "y", "w", "h", "conf")})))
+                       message=json.dumps({k: e[k] for k in ("x", "y", "w", "h", "conf")} |
+                                          {"dismissable": not refusal(e)})))
         if exposures:
             emit(event("error", job_id, stage="audit", code="E_AUDIT_EXPOSURE",
                        message=f"노출 재검사에서 보호대상 외 얼굴 {len(exposures)}건이 검출되었습니다 — 검수가 필요합니다"))
@@ -139,6 +147,6 @@ def audit_only(project_path: str | Path, output_path: str | Path, job_id: str = 
         plate_model = aprof.plate if "plate" in (project.get_meta("classes") or "plate") else ""
         return audit(output_path, plan, job_id, ctl, emit, total=project.frame_count(), stride=stride,
                      face_long_side=aprof.face_long_side, pad_frames=prof.pad_frames, src_path=project.media()["path"],
-                     profile=prof, plate_model=plate_model, registry=reg)
+                     profile=prof, plate_model=plate_model, registry=reg, dismissed=DismissIndex(dismissals(project)))
     finally:
         project.close()

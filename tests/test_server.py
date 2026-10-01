@@ -93,6 +93,16 @@ def test_full_flow(worker):
     ar = stub.AuditCheck(pb.AuditRequest(project_path=str(proj), output_path=str(out)), metadata=md)
     assert ar.exposures == 0
 
+    # 오탐 확인: 재검사 결과에 없는 항목은 거부, 사유 없으면 FAILED_PRECONDITION
+    req = pb.DismissRequest(project_path=str(proj), output_path=str(out), classes=["face"], actor="t", reason="반사")
+    req.items.add(frame=3, x=1, y=2, w=20, h=24, conf=0.3)
+    dr = stub.DismissExposures(req, metadata=md)
+    assert dr.accepted == 0 and dr.refused == 1 and dr.remaining == 0
+    req.reason = " "
+    with pytest.raises(grpc.RpcError) as e:
+        stub.DismissExposures(req, metadata=md)
+    assert e.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+
 
 def test_cancel_and_resume(worker):
     stub, md, root, clip = worker
