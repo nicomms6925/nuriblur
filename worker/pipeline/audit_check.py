@@ -138,6 +138,21 @@ def text_like(crop: np.ndarray) -> bool:
     return trans >= TEXT_MIN_TRANSITIONS
 
 
+CORE_COVER = 0.7
+
+
+def core_covered(box: tuple[float, float, float, float], regions: list[Region]) -> bool:
+    """검출 박스 중심부(가운데 50%×50%)의 CORE_COVER 이상이 마스크 아래면 이미 가려진 얼굴로 본다.
+    실제 노출 얼굴은 중심부 커버리지가 0에 가깝고, 절반 이상 드러난 얼굴도 70%에 못 미친다."""
+    from worker.pipeline.mask import coverage
+
+    if not regions:
+        return False
+    x1, y1, x2, y2 = box
+    mx, my = (x2 - x1) * 0.25, (y2 - y1) * 0.25
+    return coverage((x1 + mx, y1 + my, x2 - mx, y2 - my), regions) >= CORE_COVER
+
+
 def covered(box: tuple[float, float, float, float], regions: list[Region]) -> bool:
     from worker.pipeline.mask import coverage
 
@@ -233,6 +248,8 @@ def audit(output_path: str | Path, plan: MaskPlan, job_id: str = "", ctl: JobCon
                 if plan.is_excluded(fr.index, box):
                     continue
                 if cands is not None and not agrees(box, raw):
+                    continue
+                if core_covered(box, regions):  # 얼굴 중심부가 이미 가려짐(옆모습 머리 윤곽 재검출 등)
                     continue
                 exposures.append({"frame": fr.index, "cls": "face", "x": d.x1, "y": d.y1,
                                   "w": d.x2 - d.x1, "h": d.y2 - d.y1, "conf": d.conf})
