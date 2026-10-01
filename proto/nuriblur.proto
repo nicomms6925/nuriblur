@@ -1,0 +1,70 @@
+syntax = "proto3";
+package nuriblur.v1;
+
+service NuriBlurWorker {
+  rpc Probe(ProbeRequest) returns (MediaInfo);
+  rpc Analyze(AnalyzeRequest) returns (stream Event);
+  rpc ListTracks(ListTracksRequest) returns (TrackList);
+  rpc ApplyRules(ApplyRulesRequest) returns (DecisionList);
+  rpc MergeTracks(MergeRequest) returns (Ack);
+  rpc MatchReference(RefImages) returns (MatchResult);          // V1
+  rpc SegmentTrack(SegmentRequest) returns (stream MaskChunk);   // V2
+  rpc Render(RenderRequest) returns (stream Event);
+  rpc AuditCheck(AuditRequest) returns (AuditResult);
+  rpc Control(ControlRequest) returns (Ack);
+  rpc GetFrame(FrameRequest) returns (FrameJpeg);               // 검수용 단일 프레임(원본/마스킹)
+  rpc AllowRoot(AllowRootRequest) returns (Ack);                 // [G1-11 추가] UI가 승인한 작업 폴더 등록(경로 탈출 검사)
+  rpc Health(Empty) returns (WorkerInfo);                        // [G1-11 추가] 기동 확인·실행 환경 배지
+}
+
+message ProbeRequest { string path = 1; }
+message MediaInfo { string path = 1; string sha256 = 2; string codec = 3; int32 width = 4; int32 height = 5;
+  double fps = 6; bool is_vfr = 7; int64 frames = 8; int64 duration_ms = 9; int32 rotation = 10; string audio_codec = 11; }
+
+message AnalyzeRequest { string job_id = 1; string path = 2; string project_path = 3;
+  repeated string classes = 4;            // face, person, plate
+  string profile = 5;                     // gpu_precise | gpu_fast | cpu
+  int32 detect_interval = 6; int64 resume_from_frame = 7; }
+
+message Event { string type = 1;          // progress|stats|preview|warning|error|done
+  string job_id = 2; string stage = 3; int64 frame = 4; int64 total = 5; double fps = 6; int64 eta_s = 7;
+  double gpu_util = 8; int64 vram_mb = 9; map<string,int64> counts = 10; bytes preview_jpeg = 11;
+  string code = 12; string message = 13; string output_path = 14; string output_sha256 = 15; int32 audit_exposures = 16; }
+
+message ListTracksRequest { string project_path = 1; int64 at_frame = 2; } // at_frame<0 → 전체
+message Track { int64 id = 1; string cls = 2; int64 start_f = 3; int64 end_f = 4; double conf_avg = 5;
+  string plate_text = 6; double plate_conf = 7; int64 linked_person_id = 8; int64 merged_into = 9; bytes thumb_jpeg = 10;
+  repeated Box boxes = 11; }
+message Box { int64 frame = 1; double x = 2; double y = 3; double w = 4; double h = 5; double conf = 6; bool interpolated = 7; }
+message TrackList { repeated Track tracks = 1; repeated MergeSuggestion suggestions = 2; }
+message MergeSuggestion { int64 from_id = 1; int64 to_id = 2; double similarity = 3; string reason = 4; }
+
+message ProtectRule { int64 id = 1; string kind = 2; string payload_json = 3; }
+message ApplyRulesRequest { string project_path = 1; repeated ProtectRule rules = 2; double face_threshold = 3;
+  bool keep_stored = 4;                   // [추가] true면 rules 무시, 저장된 규칙으로 판정만 다시 계산
+  string actor = 5; }
+message Decision { int64 track_id = 1; bool protected = 2; int64 source_rule_id = 3; double confidence = 4; string flag = 5; }
+message DecisionList { repeated Decision decisions = 1; repeated ProtectRule rules = 2; } // [추가] rules: 저장된 규칙(id 확정)
+message MergeRequest { string project_path = 1; int64 from_id = 2; int64 to_id = 3; string actor = 4; }
+
+message RefImages { string project_path = 1; repeated bytes jpegs = 2; double threshold = 3; }
+message MatchResult { repeated Decision matches = 1; }
+message SegmentRequest { string project_path = 1; int64 track_id = 2; }
+message MaskChunk { int64 frame = 1; bytes rle = 2; }
+
+message RenderProfile { string style = 1; double strength = 2; double pad_ratio = 3; int32 pad_frames = 4;
+  string codec = 5; string quality = 6; bool strip_meta = 7; string watermark = 8; bool mask_body_when_face_masked = 9;
+  bool keep_audio = 10; bool no_head_fallback = 11; } // [추가] no_head_fallback: 얼굴 없는 전신 머리 마스킹 끄기(기본 켬)
+message RenderRequest { string job_id = 1; string project_path = 2; string output_path = 3; RenderProfile profile = 4; bool run_audit = 5; }
+message AuditRequest { string project_path = 1; string output_path = 2; }
+message AuditResult { int32 exposures = 1; repeated Box exposure_boxes = 2; }
+
+message AllowRootRequest { string path = 1; }
+message Empty {}
+message WorkerInfo { string version = 1; string ep = 2; repeated string providers = 3; repeated string encoders = 4; }
+
+message ControlRequest { string job_id = 1; string action = 2; } // pause|resume|cancel
+message Ack { bool ok = 1; string message = 2; }
+message FrameRequest { string project_path = 1; int64 frame = 2; bool masked = 3; int32 max_width = 4;
+  RenderProfile profile = 5; }           // [추가] 마스킹 미리보기 스타일(미지정 시 마지막 렌더 프로파일)
+message FrameJpeg { bytes jpeg = 1; }

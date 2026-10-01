@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nuriblur"
+version = "0.1.0"
+description = "지정 대상만 남기고 얼굴·번호판을 자동 마스킹하는 로컬 영상 비식별 도구"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "opencv-python-headless>=4.9",
+  "onnxruntime>=1.18",          # Windows AMD/Intel: onnxruntime-directml, NVIDIA: onnxruntime-gpu 로 교체
+  "av>=12",
+  "grpcio>=1.62",
+  "protobuf>=4.25",
+  "PySide6>=6.6",
+  "reportlab>=4.0",
+  "pillow>=10",
+]
+
+[project.optional-dependencies]
+dev = ["grpcio-tools>=1.62", "pytest>=8", "pytest-qt>=4.4", "ruff>=0.5", "mypy>=1.10", "pip-licenses>=4.4"]
+
+[project.scripts]
+nuriblur = "worker.cli:main"
+nuriblur-app = "app.main:main"
+
+[tool.setuptools.packages.find]
+include = ["worker*", "app*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = ["worker/pb", "app/pb", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501", "B008"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+exclude = ["worker/pb", "app/pb", ".venv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "slow: 실제 모델·영상을 쓰는 느린 테스트",
+  "ui: pytest-qt UI 테스트",
+]

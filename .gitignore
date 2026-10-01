@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.scratch/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+*.nbproj.tmp
+tests/data/synthetic/
+
+worker/pb/
+app/pb/
