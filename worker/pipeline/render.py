@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from worker.errors import Cancelled, CodecError
+from worker.gpu import GpuMonitor
 from worker.io.project import Project
 from worker.jobs import Emit, JobControl, Throttle, event
 from worker.models.registry import Registry, default_registry
@@ -60,6 +61,7 @@ def render(project_path: str | Path, output_path: str | Path, profile: dict[str,
         prog, prev = Throttle(0.5), Throttle(0.5)
         t0 = time.monotonic()
         n = 0
+        gpu = GpuMonitor().start()
         try:
             for fr in DecoderThread(src, warn=lambda c, m: emit(event("warning", job_id, stage="decode", code=c, message=m))):
                 ctl.check()
@@ -72,7 +74,7 @@ def render(project_path: str | Path, output_path: str | Path, profile: dict[str,
                     el = time.monotonic() - t0
                     fps = n / el if el > 0 else 0.0
                     emit(event("progress", job_id, stage="render", frame=n, total=total, fps=fps,
-                               eta_s=int((total - n) / fps) if fps > 0 else 0, gpu_util=-1.0, vram_mb=-1))
+                               eta_s=int((total - n) / fps) if fps > 0 else 0, gpu_util=gpu.util(), vram_mb=gpu.vram_mb()))
                 if prev.ready():
                     emit(event("preview", job_id, frame=fr.index, preview_jpeg=preview_jpeg(img)))
             writer.close()
@@ -84,6 +86,8 @@ def render(project_path: str | Path, output_path: str | Path, profile: dict[str,
         except BaseException:
             writer.abort()
             raise
+        finally:
+            gpu.stop()
         render_fps = n / max(time.monotonic() - t0, 1e-6)
         digest = sha256_file(output_path)
         exposures: list[dict[str, Any]] = []
@@ -91,9 +95,11 @@ def render(project_path: str | Path, output_path: str | Path, profile: dict[str,
         if run_audit:
             emit(event("progress", job_id, stage="audit", frame=0, total=total))
             stride = int(project.get_meta("detect_interval") or 1)
-            face_ls = reg.profile(project.get_meta("profile") or "cpu").face_long_side
+            aprof = reg.profile(project.get_meta("profile") or "cpu")
+            plate_model = aprof.plate if "plate" in (project.get_meta("classes") or "plate") else ""
             exposures = audit(output_path, plan, job_id, ctl, emit, total=total, stride=stride,
-                              face_long_side=face_ls, pad_frames=prof.pad_frames, src_path=src, profile=prof, registry=reg)
+                              face_long_side=aprof.face_long_side, pad_frames=prof.pad_frames, src_path=src,
+                              profile=prof, plate_model=plate_model, registry=reg)
             audited = True
         status = ("AUDITED" if not exposures else "REVIEWING") if audited else "RENDERED"
         project.upsert_job(job_id, "render", status=status, output_path=str(output_path), output_sha256=digest,
@@ -129,9 +135,10 @@ def audit_only(project_path: str | Path, output_path: str | Path, job_id: str = 
         prof = RenderProfile.from_dict(json.loads(project.get_meta("render_profile") or "{}"))
         plan = plan_for_project(project, prof)
         stride = int(project.get_meta("detect_interval") or 1)
-        face_ls = reg.profile(project.get_meta("profile") or "cpu").face_long_side
+        aprof = reg.profile(project.get_meta("profile") or "cpu")
+        plate_model = aprof.plate if "plate" in (project.get_meta("classes") or "plate") else ""
         return audit(output_path, plan, job_id, ctl, emit, total=project.frame_count(), stride=stride,
-                     face_long_side=face_ls, pad_frames=prof.pad_frames, src_path=project.media()["path"],
-                     profile=prof, registry=reg)
+                     face_long_side=aprof.face_long_side, pad_frames=prof.pad_frames, src_path=project.media()["path"],
+                     profile=prof, plate_model=plate_model, registry=reg)
     finally:
         project.close()

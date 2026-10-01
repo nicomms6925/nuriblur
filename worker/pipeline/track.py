@@ -86,6 +86,28 @@ def iou_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return inter / (aa[:, None] + bb[None, :] - inter + 1e-9)
 
 
+SMALL = 48        # 이보다 작은 박스(군중 속 얼굴 등)는 버퍼 IoU로 연관 (C-BIoU)
+BUFFER_RATIO = 0.5
+
+
+def buffered(b: np.ndarray) -> np.ndarray:
+    """작은 박스를 크기의 BUFFER_RATIO 만큼 사방으로 넓힌다. 16px 얼굴이 4프레임에 8px 움직여도 이어지도록."""
+    b = np.asarray(b, dtype=np.float64).reshape(-1, 4).copy()
+    if len(b) == 0:
+        return b
+    s = np.maximum(b[:, 2] - b[:, 0], b[:, 3] - b[:, 1])
+    pad = np.where(s < SMALL, s * BUFFER_RATIO, 0.0)
+    b[:, 0] -= pad
+    b[:, 1] -= pad
+    b[:, 2] += pad
+    b[:, 3] += pad
+    return b
+
+
+def biou(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    return iou_matrix(buffered(a), buffered(b))
+
+
 def assign(cost: np.ndarray, thresh: float) -> tuple[list[tuple[int, int]], list[int], list[int]]:
     if cost.size == 0:
         return [], list(range(cost.shape[0])), list(range(cost.shape[1]))
@@ -121,10 +143,18 @@ class STrack:
 
 
 class ByteTracker:
-    def __init__(self, interval: int = 1, fps: float = 30.0, id_alloc: Callable[[], int] | None = None):
+    def __init__(self, interval: int = 1, fps: float = 30.0, id_alloc: Callable[[], int] | None = None,
+                 dist_assoc: bool = False, max_lost_steps: int | None = None):
         self.kf = KalmanFilter()
+        # 번호판 전용: 빠르게 지나가는 작은 박스는 검출 사이에 IoU가 0이 되므로 중심 거리로 한 번 더 잇는다.
+        # 얼굴에는 쓰지 않는다(다른 사람 얼굴이 보호 트랙에 붙으면 노출됨).
+        self.dist_assoc = dist_assoc
         self.interval = max(1, interval)
         self.max_lost = max(1, int(round(BUFFER * (fps / 30.0))))
+        # 보호 안전: 얼굴·전신 트랙은 놓친 뒤 오래 기다리지 않는다 — 오래 기다리면 같은 자리를 지나는
+        # 다른 사람에게 붙어, 그 사람을 클릭해 보호할 때 앞사람 구간까지 보호(노출)된다.
+        if max_lost_steps is not None:
+            self.max_lost = min(self.max_lost, max_lost_steps * max(1, interval))
         self.tracked: list[STrack] = []
         self.lost: list[STrack] = []
         self.finished: list[STrack] = []
@@ -160,9 +190,12 @@ class ByteTracker:
         lost_u = [t for t in self.lost if not t.activated]
         pool = confirmed + lost_c
 
-        # 1차: high 검출 ↔ (확정 추적 + 확정 잃음), IoU × score 융합
+        # 1차: high 검출 ↔ (확정 추적 + 확정 잃음), IoU × score 융합.
+        # 버퍼 IoU는 직전 단계에 이어진(TRACKED) 트랙에만 — 잃은 트랙 재연결은 일반 IoU(다른 사람 오연결 방지)
         tb = np.array([t.xyxy for t in pool]).reshape(-1, 4)
-        iou = iou_matrix(tb, dets[hi_idx, :4])
+        iou = biou(tb, dets[hi_idx, :4])
+        if len(lost_c) and iou.size:
+            iou[len(confirmed):] = iou_matrix(tb[len(confirmed):], dets[hi_idx, :4])
         cost = 1 - iou * dets[hi_idx, 4][None, :] if iou.size else 1 - iou
         m, u_trk, u_det = assign(cost, MATCH)
         for i, j in m:
@@ -174,7 +207,7 @@ class ByteTracker:
         # 2차: low 검출 ↔ 남은 확정 TRACKED 트랙
         r_tracks = [pool[i] for i in u_trk if pool[i].state == TRACKED]
         tb = np.array([t.xyxy for t in r_tracks]).reshape(-1, 4)
-        m2, u_trk2, u_det2 = assign(1 - iou_matrix(tb, dets[lo_idx, :4]), 0.5)
+        m2, u_trk2, u_det2 = assign(1 - biou(tb, dets[lo_idx, :4]), 0.5)
         for i, j in m2:
             d = lo_idx[j]
             self._observe(r_tracks[i], frame, dets[d, :4], dets[d, 4])
@@ -189,7 +222,10 @@ class ByteTracker:
         cand = unconfirmed + lost_u + r_lost
         tb = np.array([t.xyxy for t in cand]).reshape(-1, 4)
         rem_arr = np.array(rem_hi + rem_lo, dtype=int)
-        iou = iou_matrix(tb, dets[rem_arr, :4]) if len(rem_arr) else np.zeros((len(cand), 0))
+        iou = biou(tb, dets[rem_arr, :4]) if len(rem_arr) else np.zeros((len(cand), 0))
+        n_fresh = len(unconfirmed)  # 미확정(직전 단계 생성)만 버퍼 IoU, 잃은 트랙은 일반 IoU
+        if iou.size and len(cand) > n_fresh:
+            iou[n_fresh:] = iou_matrix(tb[n_fresh:], dets[rem_arr, :4])
         m3, u_c, u_det3 = assign(1 - iou, 0.7)
         for i, j in m3:
             d = rem_arr[j]
@@ -199,6 +235,33 @@ class ByteTracker:
             if cand[i].state == TRACKED:
                 cand[i].state = LOST
         rem = [rem_arr[j] for j in u_det3]
+
+        # 3.5차(번호판 전용): 남은 검출 ↔ 이번에 못 이은 트랙, 중심 거리 + 크기 비
+        if self.dist_assoc and rem:
+            cand2 = [cand[i] for i in u_c] + [t for t in self.lost if t.state == LOST and t not in cand]
+            cand2 = [t for t in cand2 if frame - t.end_frame <= 3 * self.interval]
+            if cand2:
+                cost = np.full((len(cand2), len(rem)), 1e6)
+                for i, t in enumerate(cand2):
+                    tb = t.obs[t.end_frame]
+                    tw, th = tb[2] - tb[0], tb[3] - tb[1]
+                    tcx, tcy = (tb[0] + tb[2]) / 2, (tb[1] + tb[3]) / 2
+                    for j, d in enumerate(rem):
+                        w, h = dets[d, 2] - dets[d, 0], dets[d, 3] - dets[d, 1]
+                        if not (0.5 <= w / max(tw, 1e-6) <= 2.0 and 0.5 <= h / max(th, 1e-6) <= 2.0):
+                            continue
+                        dist = np.hypot((dets[d, 0] + dets[d, 2]) / 2 - tcx, (dets[d, 1] + dets[d, 3]) / 2 - tcy)
+                        if dist <= 2.5 * max(tw, th) * (frame - t.end_frame) / self.interval:
+                            cost[i, j] = dist
+                r_i, c_j = linear_sum_assignment(cost)
+                used = set()
+                for i, j in zip(r_i, c_j, strict=True):
+                    if cost[i, j] < 1e6:
+                        d = rem[j]
+                        self._observe(cand2[i], frame, dets[d, :4], dets[d, 4])
+                        result.append((int(d), cand2[i].tid))
+                        used.add(d)
+                rem = [d for d in rem if d not in used]
 
         # 4차(안전 편차): 남은 모든 검출로 새 트랙
         for d in rem:

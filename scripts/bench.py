@@ -22,13 +22,13 @@ sys.path.insert(0, str(ROOT))
 FACE_COVER = 0.9
 
 
-def face_miss_rate(plan, gt: dict, protected_gt: set[int]) -> dict:
+def face_miss_rate(plan, gt: dict, protected_gt: set[int], cls: str = "face") -> dict:
     from worker.pipeline.mask import coverage
 
     total = missed = 0
     per: dict[int, list[int]] = {}
     for o in gt["objects"]:
-        if o["cls"] != "face" or o["id"] in protected_gt:
+        if o["cls"] != cls or o["id"] in protected_gt:
             continue
         for f, (x, y, w, h) in o["boxes"].items():
             total += 1
@@ -106,11 +106,14 @@ def main() -> int:
         "render_fps": round(r["render_fps"], 2), "render_audit_s": round(t_all, 2), "encoder": r["encoder"],
         "tracks": {k: stats[k] for k in ("faces", "persons", "plates")}, "protected_tracks": protected,
         "audit_exposures": len(r["exposures"]),
+        "gpu": stats.get("gpu"),
     }
     if gt:
         with Project.open(proj) as p:
             plan = plan_for_project(p, RenderProfile())
         res["face"] = face_miss_rate(plan, gt, gt_ids)
+        if any(o["cls"] == "plate" for o in gt["objects"]):
+            res["plate"] = face_miss_rate(plan, gt, gt_ids, cls="plate")
     print(json.dumps(res, ensure_ascii=False, indent=1))
     return 0
 

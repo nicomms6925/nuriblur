@@ -2,6 +2,9 @@
 
 결과는 .nbproj(트랙 DB)에 저장되며, 이후 보호대상·마스킹 설정을 바꿔도 다시 분석하지 않는다.
 체크포인트(기본 15초마다)에 지금까지의 트랙과 checkpoint_frame을 저장해, 중단·크래시 후 이어서 분석한다.
+
+적응형 검출 간격: 검출 때마다 확실한(conf≥0.5) 얼굴·전신 중 기존 트랙에 이어지지 않은 비율을 보고,
+절반을 넘으면(타임랩스·빠른 이동 — 검출 사이 보간으로 따라갈 수 없음) FAST_HOLD_S 동안 매 프레임 검출한다.
 """
 from __future__ import annotations
 
@@ -15,6 +18,7 @@ import cv2
 import numpy as np
 
 from worker.errors import Cancelled, NBError
+from worker.gpu import GpuMonitor
 from worker.io.project import Project, TrackRow
 from worker.jobs import Emit, JobControl, Throttle, event
 from worker.models.registry import Registry, default_registry
@@ -28,6 +32,9 @@ from worker.pipeline.track import ByteTracker, STrack, densify
 
 CLASSES = ("face", "person", "plate")
 CHECKPOINT_S = 15.0
+FAST_NEW_RATIO = 0.5
+FAST_MIN_DETS = 5
+FAST_HOLD_S = 2.0
 COLORS = {"face": (56, 140, 242), "person": (200, 200, 200), "plate": (56, 140, 242)}
 
 
@@ -111,7 +118,9 @@ def analyze(path: str | Path, project_path: str | Path, job_id: str, ctl: JobCon
                    message=f"model: {det.object_spec.id} + {det.face_spec.id} + {det.plate_spec.id} · 간격 {interval}"))
 
         ids = itertools.count(project.next_track_id())
-        trackers = {c: ByteTracker(interval, media["fps"] or 30.0, id_alloc=ids.__next__) for c in CLASSES}
+        trackers = {c: ByteTracker(interval, media["fps"] or 30.0, id_alloc=ids.__next__, dist_assoc=(c == "plate"),
+                                   max_lost_steps=None if c == "plate" else 3)
+                    for c in CLASSES}
         samples: dict[int, TrackSamples] = {}
         cls_of: dict[int, str] = {}
         dirty: set[int] = set()
@@ -138,22 +147,40 @@ def analyze(path: str | Path, project_path: str | Path, job_id: str, ctl: JobCon
             project.save(reg.model_hashes())
 
         emit(event("progress", job_id, stage="decode", frame=start, total=total))
+        gpu = GpuMonitor().start()
+        cur_interval, next_det, fast_until, fast_frames = interval, start, -1, 0
+        hold = int(FAST_HOLD_S * (media["fps"] or 30))
         try:
             for fr in DecoderThread(path, start=start, warn=warn, stop=None):
                 ctl.check(on_pause=functools.partial(checkpoint, last_idx + 1))
                 idx = fr.index
                 pts_rows.append((idx, fr.pts if fr.pts is not None else idx))
-                if (idx - start) % interval == 0:
+                if idx >= next_det:
                     dets = det(fr.bgr)
                     last_dets = dets
+                    n_conf = n_new = 0
                     for c in CLASSES:
                         cd = [d for d in dets if d.cls == c]
                         arr = np.array([[d.x1, d.y1, d.x2, d.y2, d.conf] for d in cd]).reshape(-1, 5)
                         for di, tid in trackers[c].update(idx, arr):
+                            d = cd[di]
+                            if c in ("face", "person") and d.conf >= 0.5:
+                                n_conf += 1
+                                n_new += tid not in cls_of
                             cls_of[tid] = c
                             dirty.add(tid)
-                            d = cd[di]
                             samples.setdefault(tid, TrackSamples()).add(fr.bgr, (d.x1, d.y1, d.x2, d.y2), d.conf)
+                    fast = idx > start and n_conf >= FAST_MIN_DETS and n_new / n_conf > FAST_NEW_RATIO
+                    if fast:
+                        if cur_interval > 1:
+                            emit(event("warning", job_id, stage="detect", code="W_FAST_MOTION",
+                                       message=f"f{idx}: 빠른 움직임(새 트랙 {n_new}/{n_conf}) — 매 프레임 검출로 전환"))
+                        cur_interval, fast_until = 1, idx + hold
+                    elif cur_interval == 1 and idx > fast_until:
+                        cur_interval = interval
+                    next_det = idx + cur_interval
+                if cur_interval == 1 and interval > 1:
+                    fast_frames += 1
                 last_idx = idx
                 done_frames += 1
                 if prog_t.ready():
@@ -161,7 +188,7 @@ def analyze(path: str | Path, project_path: str | Path, job_id: str, ctl: JobCon
                     fps = done_frames / el if el > 0 else 0.0
                     eta = int((total - idx - 1) / fps) if fps > 0 and total else 0
                     emit(event("progress", job_id, stage="detect", frame=idx + 1, total=total, fps=fps, eta_s=eta,
-                               gpu_util=-1.0, vram_mb=-1))
+                               gpu_util=gpu.util(), vram_mb=gpu.vram_mb()))
                     counts = {c: 0 for c in CLASSES}
                     for c in cls_of.values():
                         counts[c] += 1
@@ -177,6 +204,8 @@ def analyze(path: str | Path, project_path: str | Path, job_id: str, ctl: JobCon
             project.upsert_job(job_id, "analyze", status="CANCELLED")
             project.save(reg.model_hashes())
             raise
+        finally:
+            gpu.stop()
 
         # identify / link / save
         emit(event("progress", job_id, stage="identify", frame=total, total=total))
@@ -207,13 +236,17 @@ def analyze(path: str | Path, project_path: str | Path, job_id: str, ctl: JobCon
         stats = _stats(project)
         el = time.monotonic() - t0
         stats["analyze_fps"] = round(done_frames / el, 2) if el > 0 else 0.0
+        stats["fast_motion_frames"] = fast_frames
+        if gpu.last:
+            stats["gpu"] = {"name": gpu.last["name"], "peak_util": round(gpu.peak_util, 2), "peak_vram_mb": gpu.peak_vram}
         project.upsert_job(job_id, "analyze", status="ANALYZED", checkpoint_frame=last_idx + 1,
                            ended_at=time.strftime("%Y-%m-%dT%H:%M:%S"), stats=stats)
         project.save(reg.model_hashes())
         emit(event("log", job_id, stage="save",
                    message=f"tracks: F{stats['faces']} P{stats['persons']} LP{stats['plates']} · 병합 제안 {stats['merge_suggestions']}"))
         emit(event("done", job_id, stage="analyze", frame=total, total=total, fps=stats["analyze_fps"],
-                   counts={k: v for k, v in stats.items() if isinstance(v, int)}, output_path=str(project_path)))
+                   counts={k: v for k, v in stats.items() if isinstance(v, int) and not isinstance(v, bool)},
+                   output_path=str(project_path)))
         return stats
     finally:
         project.close()

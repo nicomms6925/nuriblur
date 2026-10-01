@@ -112,6 +112,22 @@ def _point_in_poly(px: float, py: float, poly: list[list[float]]) -> bool:
     return inside
 
 
+def _velocity(boxes: dict, frames: list[int]) -> tuple[float, float]:
+    """프레임당 중심 이동량. 관측이 1개뿐이면 0."""
+    if len(frames) < 2 or frames[-1] == frames[0]:
+        return 0.0, 0.0
+    a, b = boxes[frames[0]], boxes[frames[-1]]
+    n = frames[-1] - frames[0]
+    return ((b[0] + b[2] / 2) - (a[0] + a[2] / 2)) / n, ((b[1] + b[3] / 2) - (a[1] + a[3] / 2)) / n
+
+
+def _padded(b: tuple, v: tuple[float, float], k: int, ratio: float, kind: str, tid: int) -> Region:
+    sx1, sy1, sx2, sy2 = _expand(*b[:4], ratio)
+    dx, dy = v[0] * k, v[1] * k
+    return Region(min(sx1, sx1 + dx), min(sy1, sy1 + dy), max(sx2, sx2 + dx), max(sy2, sy2 + dy),
+                  kind=kind, track_id=tid)
+
+
 def interpolate_keyframes(frames: list[list[float]]) -> dict[int, tuple[float, float, float, float]]:
     """수동 박스 키프레임 [[f,x,y,w,h],...] → 사이 프레임 선형 보간."""
     kf = sorted(([int(f[0])] + [float(v) for v in f[1:5]] for f in frames), key=lambda r: r[0])
@@ -180,16 +196,19 @@ def build_plan(tracks: list[TrackRow], decisions: dict[int, dict[str, Any]], rul
             ema = raw if ema is None else tuple(EMA_ALPHA * r + (1 - EMA_ALPHA) * e for r, e in zip(raw, ema, strict=True))
             box = (min(raw[0], ema[0]), min(raw[1], ema[1]), max(raw[2], ema[2]), max(raw[3], ema[3]))
             plan.add(f, Region(*box, kind=kind, track_id=t.id))
-        # 앞뒤 패딩 (얼굴·번호판 트랙)
+        # 앞뒤 패딩 (얼굴·번호판 트랙): 제자리 박스 ∪ 트랙 속도로 외삽한 박스
+        # (빠르게 들어오거나 나가는 객체, 짧게 끊긴 트랙에서 마스크가 뒤처지지 않도록)
         if t.cls != "person" and profile.pad_frames > 0:
             first, lastf = frames[0], frames[-1]
             fb = t.boxes[first]
             lb = t.boxes[lastf]
+            v_in = _velocity(t.boxes, frames[: min(len(frames), 5)])
+            v_out = _velocity(t.boxes, frames[-min(len(frames), 5):])
             for k in range(1, profile.pad_frames + 1):
                 if first - k >= 0 and first - k not in t.boxes:
-                    plan.add(first - k, Region(*_expand(*fb[:4], profile.pad_ratio), kind=t.cls, track_id=t.id))
+                    plan.add(first - k, _padded(fb, v_in, -k, profile.pad_ratio, t.cls, t.id))
                 if lastf + k <= last and lastf + k not in t.boxes:
-                    plan.add(lastf + k, Region(*_expand(*lb[:4], profile.pad_ratio), kind=t.cls, track_id=t.id))
+                    plan.add(lastf + k, _padded(lb, v_out, k, profile.pad_ratio, t.cls, t.id))
 
     # 수동 박스 (항상 마스킹). payload.track_id 가 있으면 그 트랙 전 구간(예: 이 구간 전신 마스킹)
     by_id = {t.id: t for t in tracks}

@@ -113,13 +113,42 @@ def test_audit_integrity_catches_missing_masks(project_copy, street_clip):
     assert any(e["cls"] == "mask_missing" for e in ex)
 
 
-def test_exposure_review_flow_converges(project_copy, gt, tmp_path):
-    """노출이 나오면 검수에서 '노출 영역 마스킹' → 재렌더링으로 0건이 되어야 한다."""
+def test_exposure_review_flow_converges(project_copy, tmp_path):
+    """재검사 노출 → 검수 '노출 영역 마스킹' → 재렌더링을 반복하면 3회 안에 0건이 되어야 한다
+    (검출기 잡음성 저신뢰 히트도 검수자가 이 동작으로 정리한다)."""
     with Project.open(project_copy) as p:
         rules_mod.apply(p, rules_mod.exposure_rules(
             [{"frame": 30, "cls": "face", "x": 600, "y": 100, "w": 40, "h": 50, "conf": 0.3}]))
         p.save()
         plan = plan_for_project(p, RenderProfile())
     assert any(r.kind == "manual" for f in (28, 30, 32) for r in plan.at(f))
-    r = render(project_copy, tmp_path / "o.mp4", {}, "t", JobControl("t"), lambda e: None, run_audit=True)
-    assert r["exposures"] == []
+    history = []
+    for i in range(3):
+        r = render(project_copy, tmp_path / f"o{i}.mp4", {}, "t", JobControl("t"), lambda e: None, run_audit=True)
+        history.append(len(r["exposures"]))
+        if not r["exposures"]:
+            break
+        with Project.open(project_copy) as p:
+            stored = [dict(id=x["id"], kind=x["kind"], payload=x["payload"]) for x in p.rules()]
+            rules_mod.apply(p, stored + rules_mod.exposure_rules(r["exposures"], span=2))
+            p.save()
+    assert history[-1] == 0, history
+
+
+def test_audit_catches_unmasked_plate(street_clip, gt):
+    """번호판 모델(audit_capable)로 가리지 않은 번호판을 노출로 잡는다."""
+    ex = audit(street_clip, MaskPlan(), stride=10, plate_model="plate_rtdetr_openimages")
+    plates = [e for e in ex if e["cls"] == "plate"]
+    assert plates
+    g = next(o for o in gt["objects"] if o["cls"] == "plate")["boxes"]
+    e = plates[0]
+    x, y, w, h = g[str(e["frame"])]
+    assert abs(e["x"] - x) < 10 and abs(e["y"] - y) < 10
+
+
+def test_plate_masked_in_regression(project_copy, gt):
+    from bench import face_miss_rate
+
+    with Project.open(project_copy) as p:
+        plan = plan_for_project(p, RenderProfile())
+    assert face_miss_rate(plan, gt, set(), cls="plate")["miss_rate"] < 0.05
