@@ -6,10 +6,11 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 *.egg-info/
-build/
-dist/
+/build/
+/dist/
 *.nbproj.tmp
 tests/data/synthetic/
 
 worker/pb/
 app/pb/
+.build/

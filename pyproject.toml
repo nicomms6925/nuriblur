@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "nuriblur"
 version = "0.1.0"
 description = "지정 대상만 남기고 얼굴·번호판을 자동 마스킹하는 로컬 영상 비식별 도구"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.12"
 dependencies = [
   "numpy>=1.26",
   "scipy>=1.11",
@@ -20,8 +20,9 @@ dependencies = [
   "pillow>=10",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = ["grpcio-tools>=1.62", "pytest>=8", "pytest-qt>=4.4", "ruff>=0.5", "mypy>=1.10", "pip-licenses>=4.4"]
+build = ["pyinstaller>=6.0"]
 
 [project.scripts]
 nuriblur = "worker.cli:main"
@@ -50,3 +51,10 @@ markers = [
   "slow: 실제 모델·영상을 쓰는 느린 테스트",
   "ui: pytest-qt UI 테스트",
 ]
+
+[tool.uv]
+default-groups = ["dev"]
+# GPU 추론은 onnxruntime 을 같은 모듈 이름의 GPU 빌드로 교체한다(동시 설치 불가):
+#   uv pip uninstall onnxruntime && uv pip install onnxruntime-gpu      (NVIDIA)
+#   uv pip uninstall onnxruntime && uv pip install onnxruntime-directml (AMD/Intel)
+# 배포용 PyAV는 scripts/build/build_release.ps1 이 LGPL 빌드 휠로 교체한다(docs/09).

@@ -1,27 +1,36 @@
-PY ?= .venv/Scripts/python.exe
+RUN ?= uv run
 
-.PHONY: proto lint test test-fast license bench clips app
+.PHONY: sync proto lint test test-fast license bench clips app regress release
+
+sync:
+	uv sync
 
 proto:
-	$(PY) scripts/gen_proto.py
+	$(RUN) python scripts/gen_proto.py
 
 lint:
-	$(PY) -m ruff check worker app scripts tests
+	$(RUN) ruff check worker app scripts tests
 
 test:
-	$(PY) -m pytest -q
+	$(RUN) pytest -q
 
 test-fast:
-	$(PY) -m pytest -q -m "not slow and not ui"
+	$(RUN) pytest -q -m "not slow and not ui"
 
 license:
-	$(PY) scripts/ci/check_license.py
+	$(RUN) python scripts/ci/check_license.py
 
 clips:
-	$(PY) scripts/make_test_clips.py
+	$(RUN) python scripts/make_test_clips.py
 
 bench:
-	$(PY) scripts/bench.py tests/data/synthetic/street_faces.mp4
+	$(RUN) python scripts/bench.py tests/data/synthetic/street_faces.mp4 --interval 2 --protect-gt 1
+
+regress:
+	$(RUN) python scripts/regress.py tests/data
 
 app:
-	$(PY) -m app.main
+	$(RUN) python -m app.main
+
+release:
+	powershell -ExecutionPolicy Bypass -File scripts/build/build_release.ps1
