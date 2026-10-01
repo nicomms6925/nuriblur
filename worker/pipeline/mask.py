@@ -143,7 +143,7 @@ def interpolate_keyframes(frames: list[list[float]]) -> dict[int, tuple[float, f
 
 
 def build_plan(tracks: list[TrackRow], decisions: dict[int, dict[str, Any]], rules: list[dict[str, Any]],
-               profile: RenderProfile, n_frames: int, fps: float) -> MaskPlan:
+               profile: RenderProfile, n_frames: int, fps: float, plate_stride: int = 0) -> MaskPlan:
     plan = MaskPlan()
     masked = {t.id for t in tracks if not (decisions.get(t.id) or {}).get("protected")}
     protected_ids = {t.id for t in tracks} - masked
@@ -198,13 +198,15 @@ def build_plan(tracks: list[TrackRow], decisions: dict[int, dict[str, Any]], rul
             plan.add(f, Region(*box, kind=kind, track_id=t.id))
         # 앞뒤 패딩 (얼굴·번호판 트랙): 제자리 박스 ∪ 트랙 속도로 외삽한 박스
         # (빠르게 들어오거나 나가는 객체, 짧게 끊긴 트랙에서 마스크가 뒤처지지 않도록)
-        if t.cls != "person" and profile.pad_frames > 0:
+        # 번호판은 번호판 모델 실행 주기(plate_stride)만큼 시작·끝이 불확실하다 → 패딩을 그 이상으로
+        pad = max(profile.pad_frames, plate_stride) if t.cls == "plate" else profile.pad_frames
+        if t.cls != "person" and pad > 0:
             first, lastf = frames[0], frames[-1]
             fb = t.boxes[first]
             lb = t.boxes[lastf]
             v_in = _velocity(t.boxes, frames[: min(len(frames), 5)])
             v_out = _velocity(t.boxes, frames[-min(len(frames), 5):])
-            for k in range(1, profile.pad_frames + 1):
+            for k in range(1, pad + 1):
                 if first - k >= 0 and first - k not in t.boxes:
                     plan.add(first - k, _padded(fb, v_in, -k, profile.pad_ratio, t.cls, t.id))
                 if lastf + k <= last and lastf + k not in t.boxes:
@@ -244,7 +246,7 @@ def plan_for_project(project: Project, profile: RenderProfile) -> MaskPlan:
     media = project.media()
     n = project.frame_count() or int(media.get("frames") or 0)
     return build_plan(project.tracks(with_boxes=True), project.decisions(), project.rules(), profile,
-                      n, float(media.get("fps") or 30.0))
+                      n, float(media.get("fps") or 30.0), plate_stride=int(project.get_meta("plate_stride") or 0))
 
 
 # ---------------- 적용 ----------------

@@ -5,7 +5,10 @@
 """
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass
+
+import numpy as np
 
 from worker.io.project import TrackRow
 from worker.pipeline.identify import cosine
@@ -29,22 +32,23 @@ def _ioa_top(face: tuple, person: tuple) -> float:
 def link_faces_to_persons(faces: list[TrackRow], persons: list[TrackRow]) -> dict[int, int]:
     """face_id -> person_id"""
     out: dict[int, int] = {}
+    # 프레임별 전신 박스 색인 — 얼굴 박스마다 그 프레임의 전신만 본다 (군중 영상의 얼굴×전신 전수 비교 회피)
+    at: dict[int, list[tuple[int, tuple]]] = {}
+    for p in persons:
+        for fr, pb in p.boxes.items():
+            at.setdefault(fr, []).append((p.id, pb))
     for f in faces:
         if not f.boxes:
             continue
-        best, best_n = None, 0
-        for p in persons:
-            if p.end_f < f.start_f or p.start_f > f.end_f:
-                continue
-            n = 0
-            for fr, fb in f.boxes.items():
-                pb = p.boxes.get(fr)
-                if pb is not None and _ioa_top(fb, pb) >= LINK_IOA:
-                    n += 1
-            if n > best_n:
-                best, best_n = p.id, n
-        if best is not None and best_n / len(f.boxes) >= LINK_TIME:
-            out[f.id] = best
+        n: dict[int, int] = {}
+        for fr, fb in f.boxes.items():
+            for pid, pb in at.get(fr, ()):
+                if _ioa_top(fb, pb) >= LINK_IOA:
+                    n[pid] = n.get(pid, 0) + 1
+        if n:
+            best = max(n, key=lambda k: (n[k], -k))
+            if n[best] / len(f.boxes) >= LINK_TIME:
+                out[f.id] = best
     return out
 
 
@@ -64,21 +68,24 @@ def merge_suggestions(tracks: list[TrackRow], fps: float) -> list[Suggestion]:
     for t in alive:
         by_cls.setdefault(t.cls, []).append(t)
     for group in by_cls.values():
-        group.sort(key=lambda t: t.start_f)
+        # 끝 프레임 순으로 정렬해 b 시작 직전 max_gap 안에서 끝난 트랙만 본다 (군중 영상의 수천 트랙에서 O(n²) 회피)
+        group.sort(key=lambda t: t.end_f)
+        ends = [t.end_f for t in group]
+        la = np.array([t.boxes[t.end_f] if t.end_f in t.boxes else t.boxes[max(t.boxes)] for t in group],
+                      np.float64)[:, :4].reshape(-1, 4)
+        lcx, lcy, lim = la[:, 0] + la[:, 2] / 2, la[:, 1] + la[:, 3] / 2, MERGE_DIST * np.maximum(la[:, 2], 1.0)
         for b in group:
+            fb = b.boxes[b.start_f] if b.start_f in b.boxes else b.boxes[min(b.boxes)]
+            lo, hi = bisect_left(ends, b.start_f - max_gap), bisect_left(ends, b.start_f)
+            if lo >= hi:
+                continue
+            d = np.hypot(lcx[lo:hi] - (fb[0] + fb[2] / 2), lcy[lo:hi] - (fb[1] + fb[3] / 2))
             cands = []
-            for a in group:
-                gap = b.start_f - a.end_f
-                if a.id == b.id or gap <= 0 or gap > max_gap:
-                    continue
-                la = a.boxes[max(a.boxes)]
-                fb = b.boxes[min(b.boxes)]
-                dist = ((la[0] + la[2] / 2 - fb[0] - fb[2] / 2) ** 2 + (la[1] + la[3] / 2 - fb[1] - fb[3] / 2) ** 2) ** 0.5
-                if dist > MERGE_DIST * max(la[2], 1.0):
-                    continue
+            for i in np.flatnonzero(d <= lim[lo:hi]):
+                a = group[lo + int(i)]
                 sim = cosine(a.embedding, b.embedding)
                 if sim >= MERGE_COS:
-                    cands.append((sim, a, gap))
+                    cands.append((sim, a, b.start_f - a.end_f))
             if cands:
                 sim, a, gap = max(cands, key=lambda x: x[0])
                 out.append(Suggestion(b.id, a.id, sim, f"gap={gap}f"))

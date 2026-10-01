@@ -3,9 +3,11 @@
 클래스: face / person / plate (+ 내부용 vehicle).
 - 얼굴: YuNet(640×640 고정 입력) — 전체 프레임 1회 + 고해상도 타일(작은 얼굴용)
 - 전신·차량: YOLOX(COCO) — 레터박스
-- 번호판: ONNX 번호판 모델(RT-DETR)을 전체 화면(plate_every 검출마다)과 차량 영역(차량이 있을 때)에 실행.
-  차량 검출과 무관하게 돌린다 — 작은 차량은 YOLOX-nano가 놓치기 때문.
-  번호판을 찾지 못한 차량은 차량 박스 하단 영역(규칙)으로 보수적 마스킹(deny-by-default).
+- 번호판: ONNX 번호판 모델(RT-DETR)을 plate_every 검출마다 전체 화면과 차량 영역(차량이 있고, 차량 영역이
+  화면의 ROI_MAX_AREA 미만이라 확대 효과가 있을 때)에 실행. 차량 검출과 무관하게 전체 화면도 돌린다 —
+  작은 차량은 YOLOX-nano가 놓치기 때문. 번호판을 찾지 못한 차량은 차량 박스 하단 영역(규칙)으로
+  보수적 마스킹(deny-by-default). 번호판 모델을 건너뛴 검출에서는 번호판을 내지 않는다
+  (트래커가 앞뒤 번호판 검출을 이어 보간 — CPU 프로파일 plate_every=2, RT-DETR CPU 1회 ≈0.3초).
 """
 from __future__ import annotations
 
@@ -20,6 +22,8 @@ from worker.models.registry import ModelSpec, Profile, Registry, create_session,
 # (군중 실영상에서 0.2~0.3 얼굴이 대량 노출 — docs/10 열린 질문)
 CONF = {"face": 0.15, "person": 0.35, "plate": 0.25, "vehicle": 0.35}
 NMS_IOU = 0.5
+ROI_MAX_AREA = 0.6
+EDGE_MARGIN = 0.02   # 화면 가장자리에 걸친 차량 판정(장변 대비)   # 차량 영역이 화면의 60% 이상이면 전체 화면 검출과 해상도 차이가 거의 없어 생략
 
 
 @dataclass
@@ -335,11 +339,19 @@ class DetectorSet:
         if self.plate is None:
             return plates_from_vehicles(vehicles)
         H, W = bgr.shape[:2]
-        found: list[Det] = []
-        if full if full is not None else (self._calls - 1) % self.plate_every == 0:
-            found += self.plate(bgr, conf_scale)
+        if not (full if full is not None else (self._calls - 1) % self.plate_every == 0):
+            # 번호판 모델을 건너뛴 검출: 화면 안쪽 번호판은 트랙 보간으로 이어지지만, 화면 가장자리에 걸친 차량은
+            # 실행 주기 사이에 번호판이 들어오거나 나간다 → 그 차량만 하단 영역 규칙으로 가린다
+            if not self.fallback:
+                return []
+            m = EDGE_MARGIN * max(W, H)
+            return plates_from_vehicles([v for v in vehicles
+                                         if v.x1 <= m or v.y1 <= m or v.x2 >= W - m or v.y2 >= H - m])
+        found: list[Det] = self.plate(bgr, conf_scale)
         if vehicles:
-            found += self.plate(bgr, conf_scale, roi=vehicle_roi(vehicles, W, H))
+            roi = vehicle_roi(vehicles, W, H)
+            if (roi[2] - roi[0]) * (roi[3] - roi[1]) < ROI_MAX_AREA * W * H:
+                found += self.plate(bgr, conf_scale, roi=roi)
         if len(found) > 1:
             b = np.array([[d.x1, d.y1, d.x2, d.y2] for d in found])
             found = [found[i] for i in nms(b, np.array([d.conf for d in found]), 0.5)]

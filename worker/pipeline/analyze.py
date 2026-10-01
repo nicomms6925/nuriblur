@@ -105,6 +105,7 @@ def analyze(path: str | Path, project_path: str | Path, job_id: str, ctl: JobCon
         project.set_meta("profile", profile)
         project.set_meta("classes", ",".join(classes))
         project.set_meta("detect_interval", str(interval))
+        project.set_meta("plate_stride", str(interval * max(1, int(prof.plate_every or 1))))  # 번호판 모델 실행 간격(프레임)
         if start > 0:
             project.delete_tracks_from(start)
             emit(event("log", job_id, stage="decode", message=f"체크포인트 프레임 {start}부터 이어서 분석합니다"))
@@ -224,10 +225,9 @@ def analyze(path: str | Path, project_path: str | Path, job_id: str, ctl: JobCon
             if r.cls == "face":
                 r.linked_person_id = links.get(r.id)
         emit(event("progress", job_id, stage="save", frame=total, total=total))
-        for r in rows:
-            s = samples.get(r.id)
-            if s and s.thumb:
-                r.thumb = project.write_thumb(r.id, s.thumb)
+        thumbs = [(r, samples[r.id].thumb) for r in rows if r.id in samples and samples[r.id].thumb]
+        for (r, _), name in zip(thumbs, project.write_thumbs([(r.id, j) for r, j in thumbs]), strict=True):
+            r.thumb = name
         project.write_tracks(rows)
         for r in prev:
             if r.cls == "face":

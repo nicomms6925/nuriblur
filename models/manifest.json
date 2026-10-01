@@ -118,7 +118,7 @@
       "detect_interval": 4,
       "face_long_side": 1280,
       "plate_fallback": "plate_from_vehicle",
-      "plate_every": 1
+      "plate_every": 3
     }
   }
 }

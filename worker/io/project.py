@@ -85,12 +85,13 @@ def _now() -> str:
 class Project:
     """열린 .nbproj 하나. 스레드 안전(내부 락)."""
 
-    def __init__(self, path: Path, workdir: Path):
+    def __init__(self, path: Path, workdir: Path, thumbs: dict[int, bytes] | None = None):
         self.path = Path(path)
         self.workdir = workdir
         self.db_path = workdir / "project.sqlite"
-        self.thumbs_dir = workdir / "thumbs"
-        self.thumbs_dir.mkdir(exist_ok=True)
+        # 썸네일은 메모리에 두고 save() 때 zip에 바로 쓴다 — 군중 영상은 트랙이 수천 개라
+        # 작업 폴더에 개별 파일로 쓰면(백신 검사 포함) 분석보다 오래 걸린다
+        self.thumbs: dict[int, bytes] = thumbs or {}
         self.lock = threading.RLock()
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
@@ -110,18 +111,25 @@ class Project:
         if not path.exists():
             raise NBError(f"프로젝트 파일 없음: {path}")
         workdir = Path(tempfile.mkdtemp(prefix="nbproj_"))
+        thumbs: dict[int, bytes] = {}
         try:
             with zipfile.ZipFile(path) as z:
+                files = []
                 for name in z.namelist():
                     # zip slip 방지
                     target = (workdir / name).resolve()
                     if not str(target).startswith(str(workdir.resolve())):
                         raise NBError(f"잘못된 프로젝트 항목: {name}")
-                z.extractall(workdir)
+                    stem = name[len("thumbs/"):-len(".jpg")] if name.startswith("thumbs/") and name.endswith(".jpg") else ""
+                    if stem.isdigit():
+                        thumbs[int(stem)] = z.read(name)
+                    elif not name.endswith("/"):
+                        files.append(name)
+                z.extractall(workdir, members=files)
         except zipfile.BadZipFile as e:
             shutil.rmtree(workdir, ignore_errors=True)
             raise NBError(f"손상된 프로젝트 파일: {path}") from e
-        return cls(path, workdir)
+        return cls(path, workdir, thumbs)
 
     def save(self, model_hashes: dict[str, Any] | None = None) -> None:
         with self.lock:
@@ -148,8 +156,8 @@ class Project:
                 with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as z:
                     z.write(snap, "project.sqlite")
                     z.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-                    for t in sorted(self.thumbs_dir.glob("*.jpg")):
-                        z.write(t, f"thumbs/{t.name}", compress_type=zipfile.ZIP_STORED)
+                    for tid in sorted(self.thumbs):
+                        z.writestr(f"thumbs/{tid}.jpg", self.thumbs[tid], compress_type=zipfile.ZIP_STORED)
                 os.replace(tmp, self.path)
             except OSError as e:
                 raise DiskError(f"프로젝트 저장 실패: {e}") from e
@@ -296,13 +304,16 @@ class Project:
             self.conn.commit()
 
     def write_thumb(self, track_id: int, jpeg: bytes) -> str:
-        name = f"{track_id}.jpg"
-        (self.thumbs_dir / name).write_bytes(jpeg)
-        return name
+        with self.lock:
+            self.thumbs[int(track_id)] = jpeg
+        return f"{track_id}.jpg"
+
+    def write_thumbs(self, items: list[tuple[int, bytes]]) -> list[str]:
+        return [self.write_thumb(tid, j) for tid, j in items]
 
     def read_thumb(self, track_id: int) -> bytes:
-        p = self.thumbs_dir / f"{track_id}.jpg"
-        return p.read_bytes() if p.exists() else b""
+        with self.lock:
+            return self.thumbs.get(int(track_id), b"")
 
     # ---------- rules / decisions ----------
     def replace_rules(self, rules: list[dict[str, Any]], actor: str = "") -> list[dict[str, Any]]:
