@@ -334,10 +334,12 @@
   "tool.track_face": "얼굴 — 앞뒤 자동 추적해 마스킹",
   "tool.track_plate": "번호판 — 앞뒤 자동 추적해 마스킹",
   "tool.track_other": "기타 영역 — 앞뒤 자동 추적해 마스킹",
+  "tool.manual_tag": "수동",
   "tool.once_face": "얼굴 — 이 프레임 부근만(±5)",
   "tool.once_plate": "번호판 — 이 프레임 부근만(±5)",
   "cls.other": "기타 영역",
-  "toast.mask_tool_on": "가릴 대상을 화면에서 드래그하세요",
+  "toast.mask_tool_on": "가릴 대상을 클릭하거나 드래그하세요 (클릭하면 주변을 자동으로 찾아 추적합니다)",
+  "toast.drag_needed": "영역을 드래그해서 지정하세요",
   "toast.tracking": "지정한 대상을 앞뒤로 추적하는 중…",
   "toast.mask_target_added": "f{a}–f{b} 구간 {n}프레임을 마스킹 대상으로 추가했습니다",
   "audit.mask_target": "{cls} 수동 지정·자동 추적 f{a}–f{b}"

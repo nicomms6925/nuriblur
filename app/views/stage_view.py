@@ -87,6 +87,7 @@ class Canvas(QGraphicsView):
 
     box_clicked = Signal(int)
     rect_drawn = Signal(QRectF)
+    point_clicked = Signal(QPointF)   # 그리기 모드에서 드래그 없이 클릭
     zoom_changed = Signal(float)
     wheel_frames = Signal(int)
     ZOOMS = (0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0)
@@ -237,6 +238,8 @@ class Canvas(QGraphicsView):
             self._drag_start = None
             if r.width() > 4 and r.height() > 4:
                 self.rect_drawn.emit(r.intersected(QRectF(0, 0, self.vw, self.vh)))
+            else:
+                self.point_clicked.emit(r.center())
             return
         super().mouseReleaseEvent(e)
 

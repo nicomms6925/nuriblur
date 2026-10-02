@@ -159,6 +159,7 @@ class MainWindow(QMainWindow):
         self.stage = StageView()
         self.stage.canvas.box_clicked.connect(self.toggle_track)
         self.stage.canvas.rect_drawn.connect(self._on_rect)
+        self.stage.canvas.point_clicked.connect(self._on_point)
         self.stage.seek.connect(self.seek)
         self.stage.step_frame.connect(lambda d: self.seek(self.frame + d))
         self.stage.step_seconds.connect(lambda sec: self.seek(self.frame + int(round(sec * (self.job.fps() if self.job else 30)))))
@@ -655,6 +656,7 @@ class MainWindow(QMainWindow):
                 st = j.status_of(t.id)
                 items.append((t.id, j.tag(t), st, QRectF(b.x, b.y, b.w, b.h)))
                 rows.append(self._track_row(j, j.tracks[t.id], st))
+            items += [(-2, tr("tool.manual_tag"), "mask", QRectF(*b)) for b in j.manual_boxes_at(frame)]
             self.stage.canvas.set_boxes(items + self._exposure_box(frame))
             self.protect.set_rows(rows)
         else:
@@ -907,6 +909,17 @@ class MainWindow(QMainWindow):
         else:
             self._manual_rect(r)
 
+    def _on_point(self, p) -> None:
+        """그리기 모드에서 클릭만 한 경우: 마스킹 대상 지정은 클릭 지점 주변 박스로(추적 시 검출기가 크기를 맞춘다),
+        수동 박스는 드래그 안내."""
+        if not self.stage.mask_b.isChecked():
+            self.say(tr("toast.drag_needed"))
+            return
+        c = self.stage.canvas
+        side = max(40.0, 0.06 * max(c.vw, 1))
+        r = QRectF(p.x() - side / 2, p.y() - side / 2, side, side).intersected(QRectF(0, 0, c.vw, c.vh))
+        self._mask_target(r)
+
     def _mask_tool_toggled(self, on: bool) -> None:
         if on:
             self.review.manual_b.setChecked(False)
@@ -918,12 +931,17 @@ class MainWindow(QMainWindow):
 
     def _mask_target(self, r: QRectF) -> None:
         """놓친 객체 지정: 종류를 고르면 워커가 앞뒤로 자동 추적해 전 구간 마스킹 규칙을 만든다."""
+        if self.job is None:
+            return
+        kind = self.ask_mask_kind()
+        if kind is not None:
+            self.apply_mask_target(r, *kind)
+
+    def ask_mask_kind(self) -> tuple[str, bool] | None:
+        """종류 선택 메뉴 (테스트에서 교체 가능). (종류, 자동 추적 여부)"""
         from PySide6.QtGui import QCursor
         from PySide6.QtWidgets import QMenu
 
-        j = self.job
-        if j is None:
-            return
         menu = QMenu(self)
         acts = {}
         for key in ("face", "plate", "other"):
@@ -932,9 +950,7 @@ class MainWindow(QMainWindow):
         for key in ("face", "plate"):
             acts[menu.addAction(tr(f"tool.once_{key}"))] = (key, False)
         chosen = menu.exec(QCursor.pos())
-        if chosen is None or chosen not in acts:
-            return
-        self.apply_mask_target(r, *acts[chosen])
+        return acts.get(chosen) if chosen is not None else None
 
     def apply_mask_target(self, r: QRectF, cls: str, track: bool) -> None:
         j = self.job
@@ -963,6 +979,11 @@ class MainWindow(QMainWindow):
             self.approval.log_event(j.case_id, self.actor(), A.MANUAL_BOX,
                                     tr("audit.mask_target", cls=tr(f"cls.{cls}") if cls != "other" else tr("cls.other"),
                                        a=a, b=b))
+        # 결과가 바로 보이도록: 검수(4단계)는 마스킹 미리보기로, 3단계는 원본 위에 수동 마스킹 영역(주황 박스)을 표시
+        if self.step == 4 and self.view_mode == "orig":
+            self.review.seg.set_value("mask")
+            self.view_mode = "mask"
+            self.stage.mode.setText(tr("view.masked"))
         self._apply_rules(j)
         self.say(tr("toast.mask_target_added", a=a, b=b, n=len(frames)))
 

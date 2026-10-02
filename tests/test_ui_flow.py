@@ -169,3 +169,27 @@ def test_viewer_controls_and_mask_target(win, qtbot, clip):
     rule = win.job.rules[-1]
     assert rule["kind"] == "manual_box" and rule["payload"]["cls"] == "face"
     assert len(rule["payload"]["frames"]) > 10
+
+    # 클릭만 해도(드래그 없이) 지정되고, 마스킹 미리보기에 실제로 반영되어야 한다
+    from PySide6.QtCore import QPointF
+
+    win.go(4)
+    win.stage.set_mask_tool(True)
+    win.ask_mask_kind = lambda: ("other", False)
+    n_rules = len(win.job.rules)
+    win.stage.canvas.point_clicked.emit(QPointF(200, 200))
+    qtbot.waitUntil(lambda: len(win.job.rules) > n_rules, timeout=60_000)
+    assert win.view_mode == "mask"
+    pb2 = __import__("app.pb.nuriblur_pb2", fromlist=["x"])
+    import cv2
+    import numpy as np
+
+    def frame(masked):
+        r = win.worker.rpc_sync("GetFrame", pb2.FrameRequest(project_path=str(win.job.project_path), frame=10,
+                                                             masked=masked, profile=pb2.RenderProfile(style="solid")))
+        return cv2.imdecode(np.frombuffer(r.jpeg, np.uint8), cv2.IMREAD_COLOR)
+
+    o, m = frame(False), frame(True)
+    s = o.shape[1] / win.stage.canvas.vw
+    y, x = int(200 * s), int(200 * s)
+    assert m[y, x].max() < 30 and abs(int(o[y - 5:y + 5, x - 5:x + 5].mean()) - int(m[y - 5:y + 5, x - 5:x + 5].mean())) > 10

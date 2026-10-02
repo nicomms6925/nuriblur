@@ -91,5 +91,17 @@ class JobItem:
         rev = sum(1 for d in self.decisions.values() if not d.protected and d.flag == "REVIEW")
         return prot, len(self.decisions) - prot - rev, rev
 
+    def manual_boxes_at(self, frame: int) -> list[tuple[float, float, float, float]]:
+        """수동 마스킹 규칙(키프레임 박스)의 해당 프레임 박스 — 원본 화면에 '수동 마스킹' 영역을 표시하는 용도."""
+        out = []
+        for r in self.rules:
+            kf = sorted((r.get("payload") or {}).get("frames") or [], key=lambda v: v[0]) if r["kind"] == "manual_box" else []
+            for a, b in zip(kf, kf[1:] or kf, strict=False):
+                if a[0] <= frame <= b[0]:
+                    t = 0.0 if b[0] == a[0] else (frame - a[0]) / (b[0] - a[0])
+                    out.append(tuple(a[i] + (b[i] - a[i]) * t for i in range(1, 5)))
+                    break
+        return out
+
     def tag(self, t: pb.Track) -> str:
         return {"face": "F", "person": "B", "plate": "P"}.get(t.cls, "?") + f"#{t.id}"
