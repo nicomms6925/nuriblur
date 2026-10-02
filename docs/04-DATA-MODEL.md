@@ -10,9 +10,11 @@ CREATE TABLE media (
   fps REAL, is_vfr INT, frames INT, duration_ms INT, rotation INT, audio_codec TEXT);
 
 CREATE TABLE track (
-  id INTEGER PRIMARY KEY, media_id INT, cls TEXT CHECK(cls IN ('face','person','plate')),
+  id INTEGER PRIMARY KEY, media_id INT, cls TEXT CHECK(cls IN ('face','person','plate','vehicle')),
   start_f INT, end_f INT, conf_avg REAL, embedding BLOB, plate_text TEXT, plate_conf REAL,
   linked_person_id INT, merged_into INT, thumb TEXT);
+-- [추가] vehicle: 번호판 선택 시 차량 트랙. linked_person_id는 부모 트랙(얼굴→전신, 번호판→차량).
+-- 구버전 프로젝트는 열 때 track 표를 다시 만들어 CHECK를 갱신한다(데이터 보존).
 
 CREATE TABLE track_box (
   track_id INT, frame INT, x REAL, y REAL, w REAL, h REAL, conf REAL, interpolated INT,

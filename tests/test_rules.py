@@ -75,3 +75,21 @@ def test_edit_distance():
 def test_exposure_rules_span():
     r = exposure_rules([{"frame": 10, "cls": "face", "x": 0, "y": 0, "w": 10, "h": 10, "conf": 0.3}], span=2)
     assert r[0]["kind"] == "manual_box" and [f[0] for f in r[0]["payload"]["frames"]] == [8, 12]
+
+
+def test_plate_vehicle_link_inheritance():
+    """차량(V#)을 보호하면 그 차량의 번호판도 보호, 번호판을 보호하면 차량도 보호."""
+    from worker.pipeline.link import link_plates_to_vehicles
+
+    veh = _t(7, "vehicle", x=80)
+    veh.boxes = {f: (80, 80, 200, 120, 0.9, 0) for f in range(0, 11)}
+    plate = _t(3, "plate", x=150)
+    plate.boxes = {f: (150, 170, 40, 12, 0.9, 0) for f in range(0, 11)}
+    other = _t(4, "plate", x=600)
+    links = link_plates_to_vehicles([plate, other], [veh])
+    assert links == {3: 7}
+    plate.linked_person_id = links[3]
+    d = _d(compute([veh, plate, other], [{"id": 1, "kind": "click", "payload": {"track_id": 7}}]))
+    assert d[3]["protected"] and not d[4]["protected"]
+    d = _d(compute([veh, plate, other], [{"id": 1, "kind": "click", "payload": {"track_id": 3}}]))
+    assert d[7]["protected"]

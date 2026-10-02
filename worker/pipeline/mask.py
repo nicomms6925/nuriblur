@@ -39,6 +39,7 @@ class RenderProfile:
     mask_body_when_face_masked: bool = False
     mask_head_when_no_face: bool = True
     keep_audio: bool = True
+    mask_all_unprotected: bool = False   # 보호대상 외 전체 가리기: 비보호 사람 전신 + 비보호 차량 전체
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> RenderProfile:
@@ -156,14 +157,17 @@ def build_plan(tracks: list[TrackRow], decisions: dict[int, dict[str, Any]], rul
         if t.cls == "face":
             for f, b in t.boxes.items():
                 face_boxes_at.setdefault(f, []).append((b[0], b[1], b[2], b[3]))
-        if t.id in protected_ids:
+        if t.id in protected_ids and t.cls != "vehicle":  # 차량 박스는 커서 운전자 얼굴 재검사까지 빼 버린다
             for f, b in t.boxes.items():
                 plan.protected.setdefault(f, []).append((b[0], b[1], b[0] + b[2], b[1] + b[3]))
 
     for t in tracks:
         if t.id not in masked or not t.boxes:
             continue
-        body = t.cls == "person" and profile.mask_body_when_face_masked and t.id in persons_with_masked_face
+        body = t.cls == "person" and (profile.mask_all_unprotected or
+                                      (profile.mask_body_when_face_masked and t.id in persons_with_masked_face))
+        if t.cls == "vehicle" and not profile.mask_all_unprotected:
+            continue  # 기본은 번호판만 가린다
         if t.cls == "person" and not (body or profile.mask_head_when_no_face):
             continue
         frames = sorted(t.boxes)

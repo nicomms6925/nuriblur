@@ -312,6 +312,7 @@ class DetectorSet:
                 dets += [d for d in od if d.cls == "person"]
             if "plate" in self.classes:
                 vehicles = [d for d in od if d.cls == "vehicle"]
+                dets += vehicles  # 차량 트랙(보호대상 지정·'보호대상 외 전체 가리기'용)
                 plates = self.plates(bgr, vehicles, conf_scale)
                 # 1차 번호판 모델은 얼굴도 번호판으로 잡는다 → 얼굴 검출과 겹치는 번호판은 버린다
                 # (그 얼굴은 얼굴 트랙으로 마스킹되고, 보호된 얼굴이 가짜 번호판 마스크에 가려지지 않게)

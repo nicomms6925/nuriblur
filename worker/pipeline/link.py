@@ -52,6 +52,36 @@ def link_faces_to_persons(faces: list[TrackRow], persons: list[TrackRow]) -> dic
     return out
 
 
+def _ioa_in(child: tuple, parent: tuple) -> float:
+    cx, cy, cw, ch = child[:4]
+    px, py, pw, ph = parent[:4]
+    ix = max(0.0, min(cx + cw, px + pw) - max(cx, px))
+    iy = max(0.0, min(cy + ch, py + ph) - max(cy, py))
+    return ix * iy / max(cw * ch, 1e-6)
+
+
+def link_plates_to_vehicles(plates: list[TrackRow], vehicles: list[TrackRow]) -> dict[int, int]:
+    """plate_id -> vehicle_id: 번호판 박스가 차량 박스 안(IoA ≥ LINK_IOA)인 프레임이 번호판 트랙의 LINK_TIME 이상."""
+    at: dict[int, list[tuple[int, tuple]]] = {}
+    for v in vehicles:
+        for fr, vb in v.boxes.items():
+            at.setdefault(fr, []).append((v.id, vb))
+    out: dict[int, int] = {}
+    for p in plates:
+        if not p.boxes:
+            continue
+        n: dict[int, int] = {}
+        for fr, pb in p.boxes.items():
+            for vid, vb in at.get(fr, ()):
+                if _ioa_in(pb, vb) >= LINK_IOA:
+                    n[vid] = n.get(vid, 0) + 1
+        if n:
+            best = max(n, key=lambda k: (n[k], -k))
+            if n[best] / len(p.boxes) >= LINK_TIME:
+                out[p.id] = best
+    return out
+
+
 @dataclass
 class Suggestion:
     from_id: int

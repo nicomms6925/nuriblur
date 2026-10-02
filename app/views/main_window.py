@@ -44,7 +44,7 @@ from app.widgets.common import Toast, TrackRowW, button
 from app.worker_client import WorkerClient
 from worker.orgmode import auditlog as A
 
-CLS_LABEL = {"face": "cls.face", "person": "cls.person", "plate": "cls.plate"}
+CLS_LABEL = {"face": "cls.face", "person": "cls.person", "plate": "cls.plate", "vehicle": "cls.vehicle"}
 
 
 class FrameFetcher:
@@ -216,6 +216,9 @@ class MainWindow(QMainWindow):
         self.review.preview_mode.connect(self._preview_mode)
         self.review.done.connect(lambda: self.go(5))
         self.protect.next.connect(lambda: self.go(4))
+        # '보호대상 외 전체 가리기'는 3단계와 5단계 체크박스가 같은 설정
+        self.protect.mask_all.connect(self._set_mask_all)
+        self.export.mask_all.toggled.connect(self._set_mask_all)
         self.export.open_folder.connect(self._open_output_folder)
         self.export.start.connect(self.start_render)
         self.export.style_changed.connect(lambda _: self.refresh_frame())
@@ -744,7 +747,7 @@ class MainWindow(QMainWindow):
             if a and b and not b.merged_into:
                 gaps.setdefault(a.id, []).append((a.end_f, b.start_f))
         order = {"protect": 0, "review": 1, "mask": 2}
-        cls_order = {"face": 0, "plate": 1, "person": 2}
+        cls_order = {"face": 0, "plate": 1, "person": 2, "vehicle": 3}
         lanes = []
         for t in sorted((t for t in j.tracks.values() if not t.merged_into),
                         key=lambda t: (order[j.status_of(t.id)], cls_order.get(t.cls, 3), t.start_f)):
@@ -909,6 +912,16 @@ class MainWindow(QMainWindow):
         else:
             self._manual_rect(r)
 
+    def _set_mask_all(self, on: bool) -> None:
+        for c in (self.protect.all_c, self.export.mask_all):
+            if c.isChecked() != on:
+                c.blockSignals(True)
+                c.setChecked(on)
+                c.blockSignals(False)
+        if self.step == 3 and on:
+            self.say(tr("toast.mask_all_on"))
+        self.refresh_frame()
+
     def _on_point(self, p) -> None:
         """그리기 모드에서 클릭만 한 경우: 마스킹 대상 지정은 클릭 지점 주변 박스로(추적 시 검출기가 크기를 맞춘다),
         수동 박스는 드래그 안내."""
@@ -1048,7 +1061,8 @@ class MainWindow(QMainWindow):
         return pb.RenderProfile(style=p["style"], strength=p["strength"], pad_ratio=p["pad_ratio"],
                                 pad_frames=p["pad_frames"], codec=p["codec"], quality=p["quality"],
                                 strip_meta=p["strip_meta"], keep_audio=p["keep_audio"],
-                                no_head_fallback=p["no_head_fallback"], watermark=p.get("watermark", ""))
+                                no_head_fallback=p["no_head_fallback"], watermark=p.get("watermark", ""),
+                                mask_all_unprotected=bool(p.get("mask_all_unprotected")))
 
     def start_render(self, prof: dict, out: str) -> None:
         j = self.job

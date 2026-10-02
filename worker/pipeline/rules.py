@@ -94,7 +94,7 @@ def compute(tracks: list[TrackRow], rules: list[dict[str, Any]], fps: float = 30
 
     # 얼굴↔전신 승계 (양방향)
     for t in tracks:
-        if t.cls == "face" and t.linked_person_id in dec:
+        if t.cls in ("face", "plate") and t.linked_person_id in dec:  # 얼굴↔전신, 번호판↔차량
             pid = t.linked_person_id
             if dec[t.id]["protected"] and not dec[pid]["protected"]:
                 protect(pid, dec[t.id]["source_rule_id"], min(dec[t.id]["confidence"], LINK_CONFIDENCE))

@@ -26,11 +26,12 @@ from worker.pipeline import rules as rules_mod
 from worker.pipeline.decode import DecoderThread
 from worker.pipeline.detect import Det, DetectorSet
 from worker.pipeline.identify import TrackSamples
-from worker.pipeline.link import link_faces_to_persons
+from worker.pipeline.link import link_faces_to_persons, link_plates_to_vehicles
 from worker.pipeline.probe import probe
 from worker.pipeline.track import ByteTracker, STrack, densify
 
-CLASSES = ("face", "person", "plate")
+CLASSES = ("face", "person", "plate")              # 사용자가 고르는 검출 대상
+TRACK_CLASSES = CLASSES + ("vehicle",)              # 차량은 번호판 선택 시 함께 추적
 CHECKPOINT_S = 15.0
 FAST_NEW_RATIO = 0.5
 FAST_MIN_DETS = 5
@@ -121,7 +122,7 @@ def analyze(path: str | Path, project_path: str | Path, job_id: str, ctl: JobCon
         ids = itertools.count(project.next_track_id())
         trackers = {c: ByteTracker(interval, media["fps"] or 30.0, id_alloc=ids.__next__, dist_assoc=(c == "plate"),
                                    max_lost_steps=None if c == "plate" else 3)
-                    for c in CLASSES}
+                    for c in TRACK_CLASSES}
         samples: dict[int, TrackSamples] = {}
         cls_of: dict[int, str] = {}
         dirty: set[int] = set()
@@ -160,7 +161,7 @@ def analyze(path: str | Path, project_path: str | Path, job_id: str, ctl: JobCon
                     dets = det(fr.bgr)
                     last_dets = dets
                     n_conf = n_new = 0
-                    for c in CLASSES:
+                    for c in TRACK_CLASSES:
                         cd = [d for d in dets if d.cls == c]
                         arr = np.array([[d.x1, d.y1, d.x2, d.y2, d.conf] for d in cd]).reshape(-1, 5)
                         for di, tid in trackers[c].update(idx, arr):
@@ -190,11 +191,11 @@ def analyze(path: str | Path, project_path: str | Path, job_id: str, ctl: JobCon
                     eta = int((total - idx - 1) / fps) if fps > 0 and total else 0
                     emit(event("progress", job_id, stage="detect", frame=idx + 1, total=total, fps=fps, eta_s=eta,
                                gpu_util=gpu.util(), vram_mb=gpu.vram_mb()))
-                    counts = {c: 0 for c in CLASSES}
+                    counts = {c: 0 for c in TRACK_CLASSES}
                     for c in cls_of.values():
                         counts[c] += 1
                     emit(event("stats", job_id, counts={"faces": counts["face"], "persons": counts["person"],
-                                                        "plates": counts["plate"]}))
+                                                        "plates": counts["plate"], "vehicles": counts["vehicle"]}))
                 if prev_t.ready():
                     emit(event("preview", job_id, frame=idx, preview_jpeg=preview_jpeg(fr.bgr, last_dets)))
                 if time.monotonic() - ck_t0 >= CHECKPOINT_S:
@@ -221,8 +222,9 @@ def analyze(path: str | Path, project_path: str | Path, job_id: str, ctl: JobCon
         prev = [t for t in project.tracks(with_boxes=True) if t.id not in new_ids]
         allrows = prev + rows
         links = link_faces_to_persons([t for t in allrows if t.cls == "face"], [t for t in allrows if t.cls == "person"])
+        links |= link_plates_to_vehicles([t for t in allrows if t.cls == "plate"], [t for t in allrows if t.cls == "vehicle"])
         for r in allrows:
-            if r.cls == "face":
+            if r.cls in ("face", "plate"):
                 r.linked_person_id = links.get(r.id)
         emit(event("progress", job_id, stage="save", frame=total, total=total))
         thumbs = [(r, samples[r.id].thumb) for r in rows if r.id in samples and samples[r.id].thumb]
@@ -230,7 +232,7 @@ def analyze(path: str | Path, project_path: str | Path, job_id: str, ctl: JobCon
             r.thumb = name
         project.write_tracks(rows)
         for r in prev:
-            if r.cls == "face":
+            if r.cls in ("face", "plate"):
                 project.update_track_fields(r.id, linked_person_id=r.linked_person_id)
         rules_mod.apply(project)  # deny-by-default 초기 판정
         stats = _stats(project)
@@ -261,6 +263,7 @@ def _stats(project: Project) -> dict[str, Any]:
         "faces": sum(t.cls == "face" for t in tracks),
         "persons": sum(t.cls == "person" for t in tracks),
         "plates": sum(t.cls == "plate" for t in tracks),
+        "vehicles": sum(t.cls == "vehicle" for t in tracks),
         "protected": sum(1 for d in dec.values() if d["protected"]),
         "review": sum(1 for d in dec.values() if d["flag"] == "REVIEW"),
         "merge_suggestions": len(merge_suggestions(tracks, project.media().get("fps") or 30.0)),

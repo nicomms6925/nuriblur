@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS media (
   fps REAL, is_vfr INT, frames INT, duration_ms INT, rotation INT, audio_codec TEXT);
 
 CREATE TABLE IF NOT EXISTS track (
-  id INTEGER PRIMARY KEY, media_id INT, cls TEXT CHECK(cls IN ('face','person','plate')),
+  id INTEGER PRIMARY KEY, media_id INT, cls TEXT CHECK(cls IN ('face','person','plate','vehicle')),
   start_f INT, end_f INT, conf_avg REAL, embedding BLOB, plate_text TEXT, plate_conf REAL,
   linked_person_id INT, merged_into INT, thumb TEXT);
 
@@ -96,8 +96,23 @@ class Project:
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.execute("PRAGMA journal_mode=MEMORY")
         self.conn.execute("PRAGMA synchronous=OFF")
+
+    def _migrate(self) -> None:
+        """구버전 프로젝트: track.cls CHECK에 'vehicle'이 없으면 표를 다시 만든다(데이터 보존)."""
+        row = self.conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='track'").fetchone()
+        if row is None or "'vehicle'" in row[0]:
+            return
+        new_sql = row[0].replace("'face','person','plate')", "'face','person','plate','vehicle')")
+        self.conn.executescript(f"""
+            ALTER TABLE track RENAME TO _track_old;
+            {new_sql};
+            INSERT INTO track SELECT * FROM _track_old;
+            DROP TABLE _track_old;
+        """)
+        self.conn.commit()
 
     # ---------- 생성/열기/저장 ----------
     @classmethod

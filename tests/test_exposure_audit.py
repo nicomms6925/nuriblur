@@ -152,3 +152,14 @@ def test_plate_masked_in_regression(project_copy, gt):
     with Project.open(project_copy) as p:
         plan = plan_for_project(p, RenderProfile())
     assert face_miss_rate(plan, gt, set(), cls="plate")["miss_rate"] < 0.05
+
+
+def test_mask_all_unprotected_render(project_copy, gt, tmp_path):
+    """보호대상 외 전체 가리기: 차량 트랙이 생기고, 비보호 전신·차량 전체를 가린 출력도 재검사 0건."""
+    _protect_actor(project_copy, gt, 1)
+    with Project.open(project_copy) as p:
+        assert any(t.cls == "vehicle" for t in p.tracks())
+    r = render(project_copy, tmp_path / "all.mp4", {"mask_all_unprotected": True}, "t", JobControl("t"),
+               lambda e: None, run_audit=True)
+    assert r["mask_tracks"].get("vehicle", 0) >= 1 and r["mask_tracks"].get("person", 0) >= 1
+    assert r["exposures"] == [], r["exposures"][:5]

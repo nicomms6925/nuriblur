@@ -116,6 +116,7 @@ def profile_from_pb(p: pb.RenderProfile) -> dict[str, Any]:
     d["mask_body_when_face_masked"] = p.mask_body_when_face_masked
     d["keep_audio"] = p.keep_audio
     d["mask_head_when_no_face"] = not p.no_head_fallback
+    d["mask_all_unprotected"] = p.mask_all_unprotected
     return d
 
 

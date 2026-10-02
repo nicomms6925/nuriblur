@@ -104,4 +104,4 @@ class JobItem:
         return out
 
     def tag(self, t: pb.Track) -> str:
-        return {"face": "F", "person": "B", "plate": "P"}.get(t.cls, "?") + f"#{t.id}"
+        return {"face": "F", "person": "B", "plate": "P", "vehicle": "V"}.get(t.cls, "?") + f"#{t.id}"

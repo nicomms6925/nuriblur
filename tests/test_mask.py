@@ -99,3 +99,49 @@ def test_profile_floor_and_segment_fallback():
 
 def test_coverage():
     assert coverage((0, 0, 10, 10), [Region(0, 0, 5, 10, "face")]) == pytest.approx(0.5, abs=0.05)
+
+
+def test_mask_all_unprotected_masks_bodies_and_vehicles():
+    """보호대상 외 전체 가리기: 비보호 사람은 전신, 비보호 차량은 차체 전체. 끄면 차량은 가리지 않는다."""
+    person = _t(1, "person", box=(100, 100, 60, 160))
+    keep = _t(2, "person", box=(300, 100, 60, 160))
+    car = _t(3, "vehicle", box=(500, 200, 200, 120))
+    dec = {2: {"protected": 1}}
+    off = build_plan([person, keep, car], dec, [], RenderProfile(), 100, 30)
+    assert {r.kind for r in off.at(15)} == {"head"}
+    on = build_plan([person, keep, car], dec, [], RenderProfile(mask_all_unprotected=True), 100, 30)
+    kinds = {r.track_id: r.kind for r in on.at(15)}
+    assert kinds == {1: "person", 3: "vehicle"}
+    assert coverage((100, 100, 160, 260), on.at(15)) == pytest.approx(1.0)
+    assert coverage((500, 200, 700, 320), on.at(15)) == pytest.approx(1.0)
+    assert coverage((300, 100, 360, 260), on.at(15)) == 0.0
+
+
+def test_old_project_migrates_vehicle_class(tmp_path):
+    """구버전 .nbproj(track.cls에 vehicle 없음)도 열면 차량 트랙을 저장할 수 있다."""
+    import sqlite3
+
+    from worker.io.project import Project
+
+    p = Project.create(tmp_path / "a.nbproj")
+    p.write_tracks([_t(1)])
+    p.save()
+    p.close()
+    import zipfile
+
+    src = tmp_path / "a.nbproj"
+    work = tmp_path / "x"
+    with zipfile.ZipFile(src) as z:
+        z.extractall(work)
+    db = sqlite3.connect(work / "project.sqlite")
+    sql = db.execute("SELECT sql FROM sqlite_master WHERE name='track'").fetchone()[0]
+    old_sql = sql.replace(",'vehicle'", "")
+    db.executescript(f"ALTER TABLE track RENAME TO t0; {old_sql}; INSERT INTO track SELECT * FROM t0; DROP TABLE t0;")
+    db.commit()
+    db.close()
+    with zipfile.ZipFile(src, "w") as z:
+        for f in work.iterdir():
+            z.write(f, f.name)
+    with Project.open(src) as q:
+        q.write_tracks([_t(9, "vehicle")])
+        assert {t.cls for t in q.tracks()} == {"face", "vehicle"}

@@ -246,11 +246,16 @@ class ProtectPanel(Panel):
     focus = Signal(int)
     add_plate = Signal(str)
     next = Signal()
+    mask_all = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         s = self.sec(tr("prot.title"))
         s.add(label(tr("prot.note"), "note", wrap=True))
+        self.all_c = QCheckBox(tr("prot.mask_all"))
+        self.all_c.toggled.connect(self.mask_all.emit)
+        s.add(self.all_c)
+        s.add(label(tr("prot.mask_all_note"), "note", wrap=True))
         c = QWidget()
         cl = QGridLayout(c)
         cl.setContentsMargins(0, 6, 0, 0)
@@ -388,10 +393,11 @@ class ExportPanel(Panel):
         self.meta.setChecked(True)
         self.head = QCheckBox(tr("exp.head_fallback"))
         self.head.setChecked(True)
+        self.mask_all = QCheckBox(tr("prot.mask_all"))
         self.audit_json = QCheckBox(tr("exp.audit_json"))
         self.watermark = QCheckBox(tr("exp.watermark"))
         self.watermark.setVisible(org_mode)
-        for c in (self.audio, self.meta, self.head, self.audit_json, self.watermark):
+        for c in (self.mask_all, self.audio, self.meta, self.head, self.audit_json, self.watermark):
             s.add(c)
         s.add(label(tr("exp.out_path"), "k"))
         row = QWidget()
@@ -436,6 +442,7 @@ class ExportPanel(Panel):
                 "pad_ratio": self.pad.value() / 100, "pad_frames": 5, "codec": self.codec.currentData(),
                 "quality": self.quality.currentData(), "strip_meta": self.meta.isChecked(),
                 "keep_audio": self.audio.isChecked(), "no_head_fallback": not self.head.isChecked(),
+                "mask_all_unprotected": self.mask_all.isChecked(),
                 "watermark_on": self.watermark.isChecked(), "audit_json": self.audit_json.isChecked()}
 
     def set_summary(self, prot: int, masked: int) -> None:

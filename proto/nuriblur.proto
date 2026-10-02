@@ -56,7 +56,8 @@ message MaskChunk { int64 frame = 1; bytes rle = 2; }
 
 message RenderProfile { string style = 1; double strength = 2; double pad_ratio = 3; int32 pad_frames = 4;
   string codec = 5; string quality = 6; bool strip_meta = 7; string watermark = 8; bool mask_body_when_face_masked = 9;
-  bool keep_audio = 10; bool no_head_fallback = 11; } // [추가] no_head_fallback: 얼굴 없는 전신 머리 마스킹 끄기(기본 켬)
+  bool keep_audio = 10; bool no_head_fallback = 11;
+  bool mask_all_unprotected = 12; } // [추가] 보호대상 외 전체 가리기(비보호 사람 전신·차량 전체) // [추가] no_head_fallback: 얼굴 없는 전신 머리 마스킹 끄기(기본 켬)
 message RenderRequest { string job_id = 1; string project_path = 2; string output_path = 3; RenderProfile profile = 4; bool run_audit = 5; }
 message AuditRequest { string project_path = 1; string output_path = 2; }
 message AuditResult { int32 exposures = 1; repeated Box exposure_boxes = 2; }

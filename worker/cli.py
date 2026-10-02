@@ -135,7 +135,7 @@ def cmd_render(a) -> int:
     prof = {"style": a.style, "strength": a.strength, "pad_ratio": a.pad_ratio, "pad_frames": a.pad_frames,
             "codec": a.codec, "quality": a.quality, "strip_meta": not a.keep_meta, "watermark": a.watermark or "",
             "keep_audio": not a.no_audio, "mask_body_when_face_masked": a.mask_body,
-            "mask_head_when_no_face": not a.no_head_fallback}
+            "mask_head_when_no_face": not a.no_head_fallback, "mask_all_unprotected": a.mask_all}
     r = render(a.project, a.output, prof, jid, JobControl(jid), Printer(a.quiet, a.json), run_audit=a.audit)
     print(json.dumps({k: v for k, v in r.items() if k != "exposures"} | {"exposures": len(r["exposures"])},
                      ensure_ascii=False))
@@ -235,6 +235,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--watermark")
     s.add_argument("--mask-body", action="store_true")
     s.add_argument("--no-head-fallback", action="store_true")
+    s.add_argument("--mask-all", action="store_true", help="보호대상 외 전체 가리기(비보호 사람 전신·차량 전체)")
     s.add_argument("--audit", action="store_true", help="노출 재검사 실행")
     s.set_defaults(fn=cmd_render)
 
