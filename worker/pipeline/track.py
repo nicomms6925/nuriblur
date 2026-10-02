@@ -246,12 +246,26 @@ class ByteTracker:
                     tb = t.obs[t.end_frame]
                     tw, th = tb[2] - tb[0], tb[3] - tb[1]
                     tcx, tcy = (tb[0] + tb[2]) / 2, (tb[1] + tb[3]) / 2
+                    gap = frame - t.end_frame
+                    # 관측이 2개 이상이면 속도로 예측한 위치에서 잰다 — 이동 방향과 어긋난 오검출(예: 화면 밖으로
+                    # 나가는 번호판 위쪽의 차체)이 트랙에 붙어 마스크가 번호판에서 벗어나는 것을 막는다
+                    prev = [f for f in t.obs if f < t.end_frame]
+                    if prev:
+                        pf = max(prev)
+                        pb = t.obs[pf]
+                        vx = (tcx - (pb[0] + pb[2]) / 2) / (t.end_frame - pf)
+                        vy = (tcy - (pb[1] + pb[3]) / 2) / (t.end_frame - pf)
+                        px, py = tcx + vx * gap, tcy + vy * gap
+                        limit = 1.5 * max(tw, th) + 0.5 * np.hypot(vx, vy) * gap
+                    else:
+                        px, py = tcx, tcy
+                        limit = 2.5 * max(tw, th) * gap / self.interval
                     for j, d in enumerate(rem):
                         w, h = dets[d, 2] - dets[d, 0], dets[d, 3] - dets[d, 1]
                         if not (0.5 <= w / max(tw, 1e-6) <= 2.0 and 0.5 <= h / max(th, 1e-6) <= 2.0):
                             continue
-                        dist = np.hypot((dets[d, 0] + dets[d, 2]) / 2 - tcx, (dets[d, 1] + dets[d, 3]) / 2 - tcy)
-                        if dist <= 2.5 * max(tw, th) * (frame - t.end_frame) / self.interval:
+                        dist = np.hypot((dets[d, 0] + dets[d, 2]) / 2 - px, (dets[d, 1] + dets[d, 3]) / 2 - py)
+                        if dist <= limit:
                             cost[i, j] = dist
                 r_i, c_j = linear_sum_assignment(cost)
                 used = set()

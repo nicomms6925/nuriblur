@@ -214,8 +214,11 @@ class MainWindow(QMainWindow):
         self.review.manual_box.connect(self._manual_mode)
         self.review.body_mask.connect(self._body_mask)
         self.review.preview_mode.connect(self._preview_mode)
-        self.review.done.connect(lambda: self.go(5))
+        self.review.done.connect(self._review_done)
         self.protect.next.connect(lambda: self.go(4))
+        self.protect.reset.connect(self._reset_rules)
+        self.protect.reanalyze.connect(self._reanalyze)
+        self.setAcceptDrops(True)
         # '보호대상 외 전체 가리기'는 3단계와 5단계 체크박스가 같은 설정
         self.protect.mask_all.connect(self._set_mask_all)
         self.export.mask_all.toggled.connect(self._set_mask_all)
@@ -400,7 +403,7 @@ class MainWindow(QMainWindow):
                 "", tr("basis.35"), "", str(j.project_path), self.actor())
         self._run_analysis(j, classes, profile)
 
-    def _run_analysis(self, j: JobItem, classes: list[str], profile: str) -> None:
+    def _run_analysis(self, j: JobItem, classes: list[str], profile: str, fresh: bool = False) -> None:
         if j.s not in (S.ANALYZING,):
             j.state.go(S.ANALYZING)
         j.analysis_running = True
@@ -409,7 +412,8 @@ class MainWindow(QMainWindow):
         self.monitor.set_mode("analyze")
         self.monitor.append_log("INFO", tr("log.analyze_start", name=j.name, profile=tr(f"profile.{profile}")))
         req = pb.AnalyzeRequest(job_id=j.job_id, path=str(j.path), project_path=str(j.project_path),
-                                classes=classes, profile=profile, detect_interval=0, resume_from_frame=-1)
+                                classes=classes, profile=profile, detect_interval=0,
+                                resume_from_frame=0 if fresh else -1)
         t = self.worker.stream("Analyze", req, self)
         t.event.connect(lambda e, jj=j: self._on_event(jj, e, "analyze"))
         t.failed.connect(lambda m, jj=j: self._stream_failed(jj, m))
@@ -480,6 +484,8 @@ class MainWindow(QMainWindow):
             if pm.loadFromData(e.preview_jpeg):
                 self.stage.canvas.set_boxes([])
                 self.stage.canvas.set_frame(pm)
+                self.stage.set_position(int(e.frame), j.frames())
+                self.timeline.set_playhead(int(e.frame))
         elif e.type in ("log", "warning"):
             if mine or e.type == "warning":
                 self.monitor.append_log("INFO" if e.type == "log" else "WARN",
@@ -771,7 +777,7 @@ class MainWindow(QMainWindow):
         items = []
         if j.exposures:
             n_low = sum(1 for e in j.exposures if e.get("dismissable"))
-            head = [button(tr("rev.mask_all"), "", lambda: self._mask_exposure(-1))]
+            head = [button(tr("rev.mask_all_rerender"), "pri", lambda: self._mask_all_and_rerender())]
             if n_low:
                 head.append(button(tr("rev.dismiss_all", n=n_low), "", lambda: self._dismiss_exposure(-1)))
             items.append((f"<span style='color:#E5534B'>{tr('rev.exposures', n=len(j.exposures))}</span>",
@@ -786,7 +792,15 @@ class MainWindow(QMainWindow):
                 if e["cls"] in ("face", "plate") and not e.get("dismissable"):
                     kind += tr("rev.exp_locked")
                 items.append((f"{tr('rev.exposure')} · f{e['frame']}", kind, b"", btn_row(*row)))
-        for s in j.suggestions:
+        live = [s for s in j.suggestions if s.to_id in j.tracks and s.from_id in j.tracks
+                and not j.tracks[s.from_id].merged_into]
+        n_safe = sum(1 for s in live if j.status_of(s.to_id) != "protect" and j.status_of(s.from_id) != "protect")
+        if live:
+            items.append((tr("rev.merge_head", n=len(live)), tr("rev.merge_head_desc", safe=n_safe), b"",
+                          button(tr("rev.merge_all", n=n_safe), "", self._merge_all) if n_safe else None))
+        # 보호와 관련된 제안을 먼저, 최대 MAX_ROWS개만 표시(군중 영상은 수천 건)
+        live.sort(key=lambda s: (j.status_of(s.to_id) != "protect", -s.similarity))
+        for s in live[:self.MAX_ROWS]:
             a, b = j.tracks.get(s.to_id), j.tracks.get(s.from_id)
             if not a or not b or b.merged_into:
                 continue
@@ -911,6 +925,62 @@ class MainWindow(QMainWindow):
             self._mask_target(r)
         else:
             self._manual_rect(r)
+
+    # ---- 창 전체 끌어다 놓기 (캔버스·패널 어디든) ----
+    def dragEnterEvent(self, e) -> None:
+        from app.views.queue_panel import video_paths
+
+        if video_paths(e.mimeData()):
+            e.acceptProposedAction()
+
+    def dragMoveEvent(self, e) -> None:
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+
+    def dropEvent(self, e) -> None:
+        from app.views.queue_panel import video_paths
+
+        paths = video_paths(e.mimeData())
+        if paths:
+            e.acceptProposedAction()
+            self.add_files(paths)
+        else:
+            self.say(tr("toast.drop_unsupported"))
+
+    # ---- 재설정 ----
+    def _reset_rules(self) -> None:
+        """보호대상·수동 마스킹·번호판 지정을 모두 지우고 기본(모두 가림)으로. 분석 결과는 그대로."""
+        j = self.job
+        if j is None or not j.tracks:
+            return
+        if self.org_mode and j.s in (S.PENDING_APPROVAL, S.APPROVED, S.DELIVERED):
+            self.say(tr("toast.locked"))
+            return
+        if QMessageBox.question(self, tr("app.name"), tr("dlg.reset_rules", n=len(j.rules))) != QMessageBox.Yes:
+            return
+        n = len(j.rules)
+        j.rules = []
+        j.exposures = []
+        self._set_mask_all(False)
+        if self.approval and j.case_id:
+            self.approval.log_event(j.case_id, self.actor(), A.PROTECT_UNSET, tr("audit.reset_rules", n=n))
+        self._apply_rules(j)
+        self.say(tr("toast.rules_reset", n=n))
+
+    def _reanalyze(self) -> None:
+        """분석을 처음부터 다시(트랙·규칙 초기화). 검출 대상·프로파일은 1단계 설정을 쓴다."""
+        j = self.job
+        if j is None or j.media is None or j.s in (S.ANALYZING, S.RENDERING, S.PAUSED):
+            return
+        if self.org_mode and j.s in (S.PENDING_APPROVAL, S.APPROVED, S.DELIVERED):
+            self.say(tr("toast.locked"))
+            return
+        if QMessageBox.question(self, tr("app.name"), tr("dlg.reanalyze")) != QMessageBox.Yes:
+            return
+        j.tracks, j.decisions, j.rules, j.suggestions, j.exposures = {}, {}, [], [], []
+        if self.approval and j.case_id:
+            self.approval.log_event(j.case_id, self.actor(), A.CASE_UPDATED, tr("audit.reanalyze"))
+        self._run_analysis(j, j.classes, j.profile, fresh=True)
 
     def _set_mask_all(self, on: bool) -> None:
         for c in (self.protect.all_c, self.export.mask_all):
@@ -1064,7 +1134,7 @@ class MainWindow(QMainWindow):
                                 no_head_fallback=p["no_head_fallback"], watermark=p.get("watermark", ""),
                                 mask_all_unprotected=bool(p.get("mask_all_unprotected")))
 
-    def start_render(self, prof: dict, out: str) -> None:
+    def start_render(self, prof: dict, out: str, confirm: bool = True) -> None:
         j = self.job
         if j is None or not j.tracks:
             return
@@ -1077,9 +1147,11 @@ class MainWindow(QMainWindow):
         if outp.resolve() == j.path.resolve():
             self.say(tr("toast.same_output"))
             return
-        if outp.exists() and QMessageBox.question(self, tr("app.name"), tr("dlg.overwrite", name=outp.name)) != QMessageBox.Yes:
+        if confirm and outp.exists() and \
+                QMessageBox.question(self, tr("app.name"), tr("dlg.overwrite", name=outp.name)) != QMessageBox.Yes:
             return
         j.output_path = outp
+        j.last_profile = dict(prof)
         self.worker.allow(outp)
         if prof.get("watermark_on") and self.approval and j.case_id:
             c = self.approval.case(j.case_id)
@@ -1130,8 +1202,82 @@ class MainWindow(QMainWindow):
             j.state.go(S.REVIEWING)
             self.monitor.stage.setText(tr("mon.audit_fail", n=e.audit_exposures))
             self._refresh_queue(j)
+            if j.auto_rounds > 0:
+                j.auto_rounds -= 1
+                self.say(tr("toast.auto_round", n=e.audit_exposures, left=j.auto_rounds))
+                QTimer.singleShot(600, lambda: self._mask_all_and_rerender(j, auto=True))
+                return
             self.say(tr("toast.audit_fail", n=e.audit_exposures))
             QTimer.singleShot(900, lambda: self.go(4))
+
+    AUTO_ROUNDS = 3
+    MAX_ROWS = 40
+
+    def _mask_all_and_rerender(self, j: JobItem | None = None, auto: bool = False) -> None:
+        """최근 재검사 노출 전부(워커가 가진 전체 목록)를 수동 박스로 가리고 같은 설정으로 다시 내보낸다.
+        남으면 최대 AUTO_ROUNDS회 자동 반복, 그래도 남으면 검수 화면으로."""
+        j = j or self.job
+        if j is None:
+            return
+        if not auto:
+            j.auto_rounds = self.AUTO_ROUNDS - 1
+        prof = j.last_profile or self.export.profile()
+        req = pb.ApplyRulesRequest(project_path=str(j.project_path), rules=j.rules_pb(), actor=self.actor(),
+                                   mask_last_audit=True)
+
+        def done(dl):
+            j.load_decisions(dl)
+            j.exposures = []
+            if self.approval and j.case_id:
+                self.approval.log_event(j.case_id, self.actor(), A.MANUAL_BOX, tr("log.exposure_masked_all"))
+            self.start_render(dict(prof), str(j.output_path), confirm=False)
+
+        self.worker.rpc("ApplyRules", req, done, lambda m: self._failed(j, m))
+
+    def _review_done(self) -> None:
+        """'검수 완료 · 내보내기로': 노출이 남아 있으면 그대로 내보내도 같은 노출이 다시 나오므로 처리 방법을 묻는다."""
+        j = self.job
+        if j is None:
+            return
+        if j.s == S.REVIEWING and j.exposures:
+            box = QMessageBox(self)
+            box.setWindowTitle(tr("app.name"))
+            box.setText(tr("dlg.exposures_left", n=max(j.last_exposures, len(j.exposures))))
+            fix = box.addButton(tr("dlg.mask_and_rerender"), QMessageBox.AcceptRole)
+            go = box.addButton(tr("dlg.go_export"), QMessageBox.DestructiveRole)
+            box.addButton(tr("dlg.cancel"), QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() is fix:
+                self._mask_all_and_rerender(j)
+                return
+            if box.clickedButton() is not go:
+                return
+        self.go(5)
+
+    def _merge_all(self) -> None:
+        """보호대상과 무관한 병합 제안을 한 번에 병합(마스킹 트랙끼리 정리 — 노출 위험 없음).
+        보호 트랙으로 이어지는 제안은 병합하면 보호가 넓어지므로 하나씩 확인한다."""
+        j = self.job
+        if j is None:
+            return
+        pairs = [(s.from_id, s.to_id) for s in j.suggestions
+                 if s.to_id in j.tracks and s.from_id in j.tracks and not j.tracks[s.from_id].merged_into
+                 and j.status_of(s.to_id) != "protect" and j.status_of(s.from_id) != "protect"]
+        if not pairs:
+            return
+        req = pb.MergeRequest(project_path=str(j.project_path), actor=self.actor(),
+                              from_ids=[a for a, _ in pairs], to_ids=[b for _, b in pairs])
+
+        def done(ack):
+            if not ack.ok:
+                self.say(ack.message)
+                return
+            if self.approval and j.case_id:
+                self.approval.log_event(j.case_id, self.actor(), A.MERGED, tr("audit.merge_all", n=ack.message))
+            self.say(tr("toast.merged_all", n=ack.message))
+            self._load_tracks(j, after=lambda: (self._refresh_review(), self.refresh_frame()))
+
+        self.worker.rpc("MergeTracks", req, done, lambda m: self._failed(j, m), timeout=600)
 
     def _open_output_folder(self) -> None:
         """탐색기에서 출력 파일을 선택한 상태로 연다."""

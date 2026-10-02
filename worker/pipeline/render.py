@@ -114,7 +114,7 @@ def render(project_path: str | Path, output_path: str | Path, profile: dict[str,
                            ended_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
                            stats={"render_fps": round(render_fps, 2), "frames": n, "encoder": writer.encoder,
                                   "mask_tracks": counts})
-        project.set_meta("last_audit", json.dumps({"output": str(output_path), "exposures": exposures[:500],
+        project.set_meta("last_audit", json.dumps({"output": str(output_path), "exposures": exposures,
                                                    "count": len(exposures)}, ensure_ascii=False))
         project.save(reg.model_hashes())
         for e in exposures[:200]:  # 검수 목록용 (UI)

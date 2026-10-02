@@ -50,4 +50,8 @@ CLI 종료 코드: 0 성공, 3 재검사 노출 있음, 4 모델 라이선스/�
 | `DismissExposures(DismissRequest) → DismissResult` | [G1-10] 재검사 오탐 확인('노출 아님'). 최근 재검사 결과의 얼굴·번호판 항목 중 신뢰도 0.5 미만만 받고(사유 필수), 나머지는 `refused`. `remaining`이 0이면 렌더 작업이 AUDITED. 사유 없음·다른 출력본은 `FAILED_PRECONDITION` |
 | 이벤트 `exposure`의 `message.dismissable` | 그 항목을 '노출 아님'으로 확인할 수 있는지(얼굴·번호판, 신뢰도 < 0.5) |
 | `RenderProfile.mask_all_unprotected` | 보호대상 외 전체 가리기(비보호 사람 전신·차량 전체). Track.cls에 `vehicle` 추가 |
+| `ApplyRulesRequest.mask_last_audit` | 최근 재검사 노출 전부(이벤트 200건 제한 없이)를 수동 박스 규칙으로 추가 — '모두 마스킹하고 다시 내보내기' |
+| `MergeRequest.from_ids/to_ids` | 일괄 병합(규칙 계산·저장 1회). 응답 message는 병합 건수 |
+| 재검사 중 `preview` 이벤트 | 재검사 중인 출력 프레임(+그 프레임 노출 박스)을 0.5초마다 |
+| `AnalyzeRequest.resume_from_frame = 0` | 처음부터 다시 분석(UI '처음부터 다시 분석') |
 | 이벤트 `warning W_FAST_MOTION` | 적응형 검출 간격: 빠른 움직임(타임랩스 등)으로 매 프레임 검출로 전환 |

@@ -237,6 +237,8 @@ class RtdetrPlateDetector:
             # 국내 번호판 종횡비: 신형 4.7 · 구형/2단 약 2 · 이륜차 약 1.5 → 1.2 미만(정사각형에 가까움)은 제외
             if w <= 2 or h <= 2 or w > 0.3 * W or h > 0.3 * H or not (1.2 <= w / h <= 8.0):
                 continue
+            if roi is not None and (w > 0.6 * cw or h > 0.6 * ch):  # 잘라 낸 영역에서도 '화면 크기' 박스를 낸다
+                continue
             out.append(Det("plate", float(s[i]), max(0.0, x1), max(0.0, y1), min(float(W), x2), min(float(H), y2)))
         return out
 

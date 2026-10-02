@@ -99,6 +99,8 @@ class Canvas(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setBackgroundBrush(QColor("#0b0d11"))
+        self.setAcceptDrops(False)               # 영상 끌어다 놓기는 메인 창이 받는다
+        self.viewport().setAcceptDrops(False)
         self.scene_ = QGraphicsScene(self)
         self.setScene(self.scene_)
         self.pix = QGraphicsPixmapItem()

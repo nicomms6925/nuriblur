@@ -27,6 +27,7 @@ CANDIDATES = {
     "hevc": ["hevc_nvenc", "hevc_qsv", "hevc_amf", "hevc_mf", "libkvazaar"],  # kvazaar: BSD-3
 }
 NV12_ENCODERS = ("_mf", "_qsv")
+MF_QUALITY = {"source": 55, "high": 65, "normal": 45}  # h264_mf/hevc_mf 품질 모드(0~100)
 MP4_AUDIO_OK = {"aac", "mp3", "ac3", "eac3", "alac", "opus", "flac"}
 
 
@@ -140,6 +141,12 @@ class VideoWriter:
         self.vs.codec_context.time_base = self.src_tb
         if self.encoder.endswith("_nvenc"):
             self.vs.options = {"preset": "p4", "rc": "vbr"}
+        elif self.encoder.endswith("_mf"):
+            # Media Foundation 소프트웨어 인코더(Baseline)는 비트레이트 모드에서 복잡한 장면(군중·타임랩스)이면
+            # 프레임을 건너뛰어 화면이 번지고 뭉개진다(원본 대비 평균 차이 19 — 무결성 검사 mask_missing 원인).
+            # 품질 모드는 비트레이트가 늘지만 화질이 유지된다(같은 장면 차이 4).
+            self.vs.options = {"rate_control": "quality", "quality": str(MF_QUALITY.get(quality, 55))}
+        self.vs.codec_context.gop_size = max(1, int(round(float(fps) * 2)))  # 2초마다 키프레임(탐색·오류 복구)
         # 오디오
         self.aud_in = None
         self.aud_out = None

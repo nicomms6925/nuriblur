@@ -44,10 +44,13 @@ message MergeSuggestion { int64 from_id = 1; int64 to_id = 2; double similarity 
 message ProtectRule { int64 id = 1; string kind = 2; string payload_json = 3; }
 message ApplyRulesRequest { string project_path = 1; repeated ProtectRule rules = 2; double face_threshold = 3;
   bool keep_stored = 4;                   // [추가] true면 rules 무시, 저장된 규칙으로 판정만 다시 계산
-  string actor = 5; }
+  string actor = 5; 
+  bool mask_last_audit = 6; // [추가] 최근 재검사 노출 전부(UI에 보낸 200건 제한 없이)를 수동 박스로 추가
+}
 message Decision { int64 track_id = 1; bool protected = 2; int64 source_rule_id = 3; double confidence = 4; string flag = 5; }
 message DecisionList { repeated Decision decisions = 1; repeated ProtectRule rules = 2; } // [추가] rules: 저장된 규칙(id 확정)
-message MergeRequest { string project_path = 1; int64 from_id = 2; int64 to_id = 3; string actor = 4; }
+message MergeRequest { string project_path = 1; int64 from_id = 2; int64 to_id = 3; string actor = 4;
+  repeated int64 from_ids = 5; repeated int64 to_ids = 6; } // [추가] 일괄 병합(저장 1회)
 
 message RefImages { string project_path = 1; repeated bytes jpegs = 2; double threshold = 3; }
 message MatchResult { repeated Decision matches = 1; }

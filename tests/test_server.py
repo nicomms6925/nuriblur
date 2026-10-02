@@ -23,6 +23,7 @@ def worker(tmp_path_factory, short_clip):
     ch = grpc.insecure_channel(f"127.0.0.1:{port}")
     stub = pbg.NuriBlurWorkerStub(ch)
     md = (("x-nb-token", token),)
+    stub.svc = svc  # 서버 내부 상태 확인용(테스트 전용)
     yield stub, md, root, short_clip
     ch.close()
     svc.shutdown()
@@ -90,6 +91,9 @@ def test_full_flow(worker):
                                             run_audit=True), metadata=md))
     done = [e for e in evs if e.type == "done"]
     assert done and done[0].audit_exposures == 0 and len(done[0].output_sha256) == 64
+    # 재검사 중에도 미리보기 화면이 진행된다
+    first_audit = next(i for i, e in enumerate(evs) if e.type == "progress" and e.stage == "audit")
+    assert any(e.type == "preview" for e in evs[first_audit:])
     ar = stub.AuditCheck(pb.AuditRequest(project_path=str(proj), output_path=str(out)), metadata=md)
     assert ar.exposures == 0
 
@@ -125,3 +129,25 @@ def test_cancel_and_resume(worker):
                                               detect_interval=1, resume_from_frame=-1), metadata=md))
     assert evs[-1].type == "done"
     assert any("이어서" in e.message for e in evs if e.type == "log")
+
+
+def test_mask_last_audit_and_batch_merge(worker):
+    """'모두 마스킹하고 다시 내보내기'는 UI 200건 제한 없이 재검사 노출 전부를 수동 박스로, 병합은 일괄 처리."""
+    stub, md, root, clip = worker
+    proj = root / "case.nbproj"
+    p = stub.svc._project(str(proj))
+    exps = [{"frame": f, "cls": "face", "x": 10.0 + f, "y": 20.0, "w": 30.0, "h": 36.0, "conf": 0.3} for f in range(250)]
+    p.set_meta("last_audit", json.dumps({"output": str(root / "out.mp4"), "exposures": exps, "count": 250}))
+    kept = stub.ApplyRules(pb.ApplyRulesRequest(project_path=str(proj), keep_stored=True), metadata=md)
+    dl = stub.ApplyRules(pb.ApplyRulesRequest(project_path=str(proj), rules=kept.rules, mask_last_audit=True), metadata=md)
+    audit_boxes = [r for r in dl.rules if r.kind == "manual_box" and json.loads(r.payload_json).get("source") == "audit"]
+    assert len(audit_boxes) == 250 and len(dl.rules) == len(kept.rules) + 250
+
+    tl = stub.ListTracks(pb.ListTracksRequest(project_path=str(proj), at_frame=-1), metadata=md)
+    faces = sorted(t.id for t in tl.tracks if t.cls == "face" and not t.merged_into)[:4]
+    ack = stub.MergeTracks(pb.MergeRequest(project_path=str(proj), from_ids=[faces[1], faces[3]],
+                                           to_ids=[faces[0], faces[2]]), metadata=md)
+    assert ack.ok and ack.message == "2"
+    tl = stub.ListTracks(pb.ListTracksRequest(project_path=str(proj), at_frame=-1), metadata=md)
+    merged = {t.id: t.merged_into for t in tl.tracks}
+    assert merged[faces[1]] == faces[0] and merged[faces[3]] == faces[2]

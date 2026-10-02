@@ -234,6 +234,7 @@ def audit(output_path: str | Path, plan: MaskPlan, job_id: str = "", ctl: JobCon
     scale = AUDIT_CONF / CONF["face"]
     exposures: list[dict[str, Any]] = []
     prog = Throttle(0.5)
+    prev = Throttle(0.5)
     stride = max(1, stride)
     src_iter = iter_frames(src_path) if src_path else None
     n_out = 0
@@ -273,6 +274,13 @@ def audit(output_path: str | Path, plan: MaskPlan, job_id: str = "", ctl: JobCon
                               if not dismissed.match(fr.index, "plate", (e["x"], e["y"], e["x"] + e["w"], e["y"] + e["h"]))]
         if emit and prog.ready():
             emit(event("progress", job_id, stage="audit", frame=fr.index + 1, total=total))
+        if emit and prev.ready():  # 재검사 중인 출력 프레임 + 이 프레임의 노출 박스
+            from worker.pipeline.analyze import preview_jpeg
+            from worker.pipeline.detect import Det
+
+            here = [Det("face", e["conf"], e["x"], e["y"], e["x"] + e["w"], e["y"] + e["h"])
+                    for e in exposures if e["frame"] == fr.index]
+            emit(event("preview", job_id, frame=fr.index, preview_jpeg=preview_jpeg(fr.bgr, here)))
     if total and n_out != total:
         exposures.append({"frame": n_out, "cls": "frame_count", "x": 0, "y": 0, "w": 0, "h": 0,
                           "conf": 1.0, "detail": f"출력 프레임 수 {n_out} ≠ 원본 {total}"})

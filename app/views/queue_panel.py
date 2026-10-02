@@ -35,6 +35,18 @@ def res_label(w: int, h: int) -> str:
     return "4K" if m >= 2000 else f"{m}p"
 
 
+def video_paths(mime) -> list[Path]:
+    """끌어다 놓은 항목 → 영상·프로젝트 파일 목록 (폴더는 안의 영상)."""
+    paths = []
+    for u in mime.urls() if mime.hasUrls() else []:
+        p = Path(u.toLocalFile())
+        if p.is_dir():
+            paths += [x for x in sorted(p.iterdir()) if x.suffix.lower() in VIDEO_EXT]
+        elif p.suffix.lower() in VIDEO_EXT or p.suffix.lower() == ".nbproj":
+            paths.append(p)
+    return paths
+
+
 class DropZone(QFrame):
     files = Signal(list)
 
@@ -65,15 +77,14 @@ class DropZone(QFrame):
     def dropEvent(self, e) -> None:
         self.setProperty("hover", False)
         repolish(self)
-        paths = []
-        for u in e.mimeData().urls():
-            p = Path(u.toLocalFile())
-            if p.is_dir():
-                paths += [x for x in sorted(p.iterdir()) if x.suffix.lower() in VIDEO_EXT]
-            elif p.suffix.lower() in VIDEO_EXT or p.suffix.lower() == ".nbproj":
-                paths.append(p)
+        paths = video_paths(e.mimeData())
         if paths:
+            e.acceptProposedAction()
             self.files.emit(paths)
+
+    def dragMoveEvent(self, e) -> None:
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
 
 
 class JobRow(QWidget):

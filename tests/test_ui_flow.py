@@ -193,3 +193,58 @@ def test_viewer_controls_and_mask_target(win, qtbot, clip):
     s = o.shape[1] / win.stage.canvas.vw
     y, x = int(200 * s), int(200 * s)
     assert m[y, x].max() < 30 and abs(int(o[y - 5:y + 5, x - 5:x + 5].mean()) - int(m[y - 5:y + 5, x - 5:x + 5].mean())) > 10
+
+
+
+def test_drop_reset_and_reanalyze(win, qtbot, clip, monkeypatch):
+    """영상 화면(캔버스) 위에 끌어다 놓기 → 분석 → 보호 지정 → 설정 초기화 → 처음부터 다시 분석."""
+    from PySide6.QtCore import QMimeData, QPoint, Qt, QUrl
+    from PySide6.QtGui import QDragEnterEvent, QDropEvent
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from app.state.machine import S
+
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(clip))])
+    target = win.stage.canvas.viewport()
+    assert not target.acceptDrops()  # 캔버스는 놓기를 삼키지 않고 메인 창으로 넘긴다
+    enter = QDragEnterEvent(QPoint(10, 10), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)
+    QApplication.sendEvent(target, enter)
+    assert enter.isAccepted()
+    QApplication.sendEvent(target, QDropEvent(QPoint(10, 10), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier))
+    qtbot.waitUntil(lambda: win.job is not None and win.job.media is not None, timeout=60_000)
+    win.input._start()
+    qtbot.waitUntil(lambda: win.step == 3, timeout=300_000)
+    face = next(t.id for t in win.job.tracks.values() if t.cls == "face")
+    win.toggle_track(face, True)
+    qtbot.waitUntil(lambda: win.job.status_of(face) == "protect", timeout=60_000)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    win._reset_rules()
+    qtbot.waitUntil(lambda: win.job.status_of(face) != "protect", timeout=60_000)
+    assert win.job.rules == [] and win.job.counters()[0] == 0
+    win._reanalyze()
+    assert win.step == 2
+    qtbot.waitUntil(lambda: win.step == 3 and bool(win.job.tracks), timeout=300_000)
+    assert win.job.s == S.RULES_APPLIED
+
+
+def test_exposures_auto_mask_rounds_then_review(win, qtbot, tmp_path):
+    """재검사 노출 → '모두 마스킹하고 다시 내보내기'를 최대 3회 자동 반복, 그래도 남으면 검수 화면으로(무한 반복 없음)."""
+    from app.pb import nuriblur_pb2 as pb
+    from app.session import JobItem
+    from app.state.machine import JobState, S
+
+    j = JobItem(path=tmp_path / "a.mp4")
+    j.state = JobState(S.RENDERING)  # 큐에 올리지 않은 작업으로 완료 처리만 검사
+    calls = []
+    win._mask_all_and_rerender = lambda jj=None, auto=False: calls.append(auto)
+    j.auto_rounds = 2
+    e = pb.Event(type="done", audit_exposures=5, output_path=str(tmp_path / "o.mp4"))
+    win._render_done(j, e)
+    qtbot.waitUntil(lambda: calls == [True], timeout=5_000)
+    assert j.auto_rounds == 1 and j.s == S.REVIEWING
+    j.state = JobState(S.RENDERING)
+    j.auto_rounds = 0
+    win._render_done(j, e)
+    qtbot.wait(1_500)
+    assert calls == [True] and j.s == S.REVIEWING and j.auto_rounds == 0

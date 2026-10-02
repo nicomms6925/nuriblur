@@ -32,6 +32,8 @@ class JobItem:
     analysis_running: bool = False
     classes: list[str] = field(default_factory=lambda: ["face", "person", "plate"])
     profile: str = "cpu"
+    last_profile: dict | None = None    # 마지막 내보내기 설정(자동 재내보내기용)
+    auto_rounds: int = 0                # 남은 자동 '모두 마스킹 → 다시 내보내기' 횟수
     audit_json: bool = False
 
     def __post_init__(self) -> None:

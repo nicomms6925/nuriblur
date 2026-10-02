@@ -331,6 +331,11 @@ class Service(pbg.NuriBlurWorkerServicer):
                 if not request.keep_stored:
                     rules = [{"id": r.id or None, "kind": r.kind, "payload": json.loads(r.payload_json or "{}")}
                              for r in request.rules]
+                if request.mask_last_audit:
+                    if rules is None:
+                        rules = [dict(id=r["id"], kind=r["kind"], payload=r["payload"]) for r in p.rules()]
+                    last = json.loads(p.get_meta("last_audit") or "{}").get("exposures", [])
+                    rules += rules_mod.exposure_rules(last, span=max(2, int(p.get_meta("detect_interval") or 2)))
                 dec = rules_mod.apply(p, rules, threshold=request.face_threshold or rules_mod.DEFAULT_THRESHOLD,
                                       actor=request.actor)
                 p.save()
@@ -352,18 +357,28 @@ class Service(pbg.NuriBlurWorkerServicer):
         try:
             p = self._project(request.project_path)
             with p.lock:
-                if request.to_id and request.from_id == request.to_id:
-                    return pb.Ack(ok=False, message="같은 트랙")
+                pairs = list(zip(request.from_ids, request.to_ids, strict=True)) or [(request.from_id, request.to_id)]
                 ids = {t.id: t for t in p.tracks()}
-                if request.from_id not in ids or (request.to_id and request.to_id not in ids):
-                    return pb.Ack(ok=False, message="트랙 없음")
-                if request.to_id and ids[request.from_id].cls != ids[request.to_id].cls:
-                    return pb.Ack(ok=False, message="클래스가 다른 트랙은 병합할 수 없습니다")
-                p.update_track_fields(request.from_id, merged_into=request.to_id or None)
+                done = 0
+                for fid, tid in pairs:
+                    if tid and fid == tid:
+                        if len(pairs) == 1:
+                            return pb.Ack(ok=False, message="같은 트랙")
+                        continue
+                    if fid not in ids or (tid and tid not in ids):
+                        if len(pairs) == 1:
+                            return pb.Ack(ok=False, message="트랙 없음")
+                        continue
+                    if tid and ids[fid].cls != ids[tid].cls:
+                        if len(pairs) == 1:
+                            return pb.Ack(ok=False, message="클래스가 다른 트랙은 병합할 수 없습니다")
+                        continue
+                    p.update_track_fields(fid, merged_into=tid or None)
+                    done += 1
                 rules_mod.apply(p)
                 p.save()
                 self.plans.pop(str(p.path.resolve()), None)
-            return pb.Ack(ok=True, message=f"{request.from_id}->{request.to_id}")
+            return pb.Ack(ok=True, message=f"{request.from_id}->{request.to_id}" if len(pairs) == 1 else str(done))
         except Exception as e:  # noqa: BLE001
             self._fail(context, e)
 

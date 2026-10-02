@@ -247,6 +247,8 @@ class ProtectPanel(Panel):
     add_plate = Signal(str)
     next = Signal()
     mask_all = Signal(bool)
+    reset = Signal()
+    reanalyze = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -287,6 +289,9 @@ class ProtectPanel(Panel):
         s = self.sec()
         s.add(btn_row(button(tr("prot.next"), "pri", self.next.emit)))
         s.add(label(tr("prot.next_note"), "note", wrap=True))
+        s = self.sec(tr("prot.reset_title"))
+        s.add(btn_row(button(tr("prot.reset"), "", self.reset.emit), button(tr("prot.reanalyze"), "", self.reanalyze.emit)))
+        s.add(label(tr("prot.reset_note"), "note", wrap=True))
         self.finish()
 
     def set_counts(self, prot: int, mask: int, rev: int) -> None:
