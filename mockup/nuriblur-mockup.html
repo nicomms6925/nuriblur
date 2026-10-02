@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>NuriBlur v0.1 — 동영상 사생활보호 마스킹 (목업)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+  --bg:#15181E;--panel:#1D2129;--panel2:#242933;--line:#2F3540;--line2:#3A4150;
+  --ink:#E8EBF0;--ink2:#A6ADBA;--ink3:#6F7785;
+  --brand:#0E7A57;--brand2:#1FA97B;
+  --mask:#F28C38;--protect:#2BB3A3;--review:#E8C547;--danger:#E5534B;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  --sans:Pretendard,'Pretendard Variable',-apple-system,'Apple SD Gothic Neo','Malgun Gothic',system-ui,sans-serif;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#EEF0F3;--panel:#FFFFFF;--panel2:#F4F6F8;--line:#D9DEE5;--line2:#C4CAD3;
+    --ink:#1A1F28;--ink2:#4F5767;--ink3:#8A92A0;--brand2:#0E7A57;
+  }
+}
+html{scroll-padding-top:env(safe-area-inset-top,0px);height:100%}
+body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13px;line-height:1.45;overflow:hidden}
+*{box-sizing:border-box}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+button:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--brand2);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+.app{display:grid;grid-template-rows:48px 1fr 160px;grid-template-columns:260px 1fr 320px;height:100%;
+  grid-template-areas:"top top top" "queue stage side" "tl tl tl"}
+.top{grid-area:top;display:flex;align-items:center;gap:20px;padding:0 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+.logo{display:flex;align-items:center;gap:8px;font-weight:700;font-size:15px;letter-spacing:-.01em}
+.logo i{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--brand),var(--brand2));display:grid;place-items:center;color:#fff;font-style:normal;font-size:12px}
+.logo small{font-weight:400;color:var(--ink3);font-family:var(--mono);font-size:11px}
+.stepper{display:flex;gap:4px;margin-left:12px}
+.step{display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:8px;color:var(--ink2)}
+.step b{width:20px;height:20px;border-radius:50%;border:1.5px solid var(--line2);display:grid;place-items:center;font-size:11px;font-family:var(--mono);font-weight:500}
+.step.done b{background:var(--brand);border-color:var(--brand);color:#fff}
+.step.cur{background:var(--panel2);color:var(--ink)}
+.step.cur b{border-color:var(--brand2);color:var(--brand2)}
+.topright{margin-left:auto;display:flex;gap:8px;align-items:center;color:var(--ink3);font-family:var(--mono);font-size:11px}
+.pill{padding:3px 8px;border-radius:999px;border:1px solid var(--line2)}
+.pill.gpu{color:var(--brand2);border-color:var(--brand)}
+
+.queue{grid-area:queue;border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+.ph{padding:12px 14px 8px;font-weight:600;font-size:12px;color:var(--ink2);display:flex;justify-content:space-between;align-items:center}
+.ph button{color:var(--brand2);font-size:12px}
+.drop{margin:0 12px 10px;border:1.5px dashed var(--line2);border-radius:10px;padding:14px 12px;text-align:center;color:var(--ink2)}
+.drop strong{display:block;color:var(--ink);font-weight:600;margin-bottom:2px}
+.urlrow{display:flex;gap:6px;margin:0 12px 12px}
+.urlrow input{flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--ink);font:inherit;font-size:12px;min-width:0}
+.urlrow button{background:var(--brand);color:#fff;border-radius:8px;padding:0 12px;font-weight:600}
+.jobs{overflow:auto;flex:1}
+.job{display:grid;grid-template-columns:44px 1fr;gap:10px;padding:10px 14px;border-top:1px solid var(--line);cursor:pointer}
+.job.sel{background:var(--panel2);box-shadow:inset 3px 0 0 var(--brand2)}
+.thumb{width:44px;height:30px;border-radius:4px;background:#2b3a44;position:relative;overflow:hidden}
+.thumb::after{content:"";position:absolute;inset:auto 0 0 0;height:40%;background:#3e4a50}
+.job .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.job .m{color:var(--ink3);font-family:var(--mono);font-size:10.5px;display:flex;gap:8px;margin-top:2px}
+.st{font-size:10.5px;padding:1px 6px;border-radius:4px;font-weight:600}
+.st.a{background:rgba(31,169,123,.15);color:var(--brand2)}.st.r{background:rgba(232,197,71,.15);color:var(--review)}.st.q{background:var(--panel2);color:var(--ink3)}.st.d{background:rgba(43,179,163,.15);color:var(--protect)}
+
+.stage{grid-area:stage;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
+.canvaswrap{flex:1;display:grid;place-items:center;padding:16px;min-height:0;position:relative}
+.canvas{width:100%;max-width:920px;aspect-ratio:16/9;background:#0b0d11;border-radius:10px;overflow:hidden;position:relative;box-shadow:0 0 0 1px var(--line)}
+.canvas svg{width:100%;height:100%;display:block}
+.hud{position:absolute;left:12px;top:12px;display:flex;gap:6px}
+.hud span{font-family:var(--mono);font-size:10.5px;padding:2px 7px;border-radius:5px;background:rgba(0,0,0,.55);color:#dfe3ea}
+.legend{position:absolute;right:12px;top:12px;display:flex;gap:10px;font-size:11px;color:#dfe3ea;background:rgba(0,0,0,.55);padding:4px 9px;border-radius:6px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.transport{display:flex;align-items:center;gap:10px;padding:8px 16px 12px;color:var(--ink2);font-family:var(--mono);font-size:11px}
+.transport .bar{flex:1;height:4px;border-radius:2px;background:var(--line);position:relative}
+.transport .bar i{position:absolute;left:0;top:0;bottom:0;width:36%;background:var(--brand2);border-radius:2px}
+.transport .bar b{position:absolute;top:-4px;left:36%;width:12px;height:12px;border-radius:50%;background:#fff;transform:translateX(-50%)}
+.transport button{width:28px;height:28px;border-radius:6px;background:var(--panel2);display:grid;place-items:center;color:var(--ink)}
+
+/* boxes on canvas */
+.bx{cursor:pointer}
+.bx rect{fill:transparent;stroke-width:2;rx:3}
+.bx.mask rect{stroke:var(--mask)}.bx.protect rect{stroke:var(--protect)}.bx.review rect{stroke:var(--review);stroke-dasharray:5 3}
+.bx text{font-family:var(--mono);font-size:10px;fill:#0b0d11;font-weight:600}
+.bx.mask .tag{fill:var(--mask)}.bx.protect .tag{fill:var(--protect)}.bx.review .tag{fill:var(--review)}
+.bx:hover rect{stroke-width:3}
+.mosaic{fill:url(#mosaicp)}
+.hidden{display:none!important}
+
+.side{grid-area:side;border-left:1px solid var(--line);background:var(--panel);overflow:auto;min-height:0}
+.panel{display:none;padding:0 0 16px}.panel.on{display:block}
+.sec{padding:12px 16px;border-bottom:1px solid var(--line)}
+.sec h3{margin:0 0 10px;font-size:12px;color:var(--ink2);font-weight:600}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;font-size:12.5px}
+.row .k{color:var(--ink2)}.row .v{font-family:var(--mono);font-size:11.5px}
+.prog{height:8px;border-radius:4px;background:var(--panel2);overflow:hidden;margin:8px 0 6px}
+.prog i{display:block;height:100%;background:linear-gradient(90deg,var(--brand),var(--brand2));width:0;transition:width .3s}
+.stages{display:grid;gap:4px;margin-top:8px}
+.sg{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink3)}
+.sg i{width:8px;height:8px;border-radius:50%;background:var(--line2)}
+.sg.done{color:var(--ink2)}.sg.done i{background:var(--brand)}
+.sg.run{color:var(--ink)}.sg.run i{background:var(--brand2);box-shadow:0 0 0 3px rgba(31,169,123,.25)}
+.gauges{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.g{background:var(--panel2);border-radius:8px;padding:8px 10px}
+.g .n{font-family:var(--mono);font-size:16px;font-weight:500}.g .l{font-size:10.5px;color:var(--ink3)}
+.counts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.c{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.c .n{font-family:var(--mono);font-size:18px}.c .l{font-size:10.5px;color:var(--ink3)}
+.c.p{border-color:var(--protect)}.c.w{border-color:var(--review)}
+.log{font-family:var(--mono);font-size:10.5px;background:#0f1216;color:#b8c0cc;border-radius:8px;padding:8px 10px;height:120px;overflow:auto;white-space:pre}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]) .log{background:#1a1f28}}
+.log .w{color:var(--review)}.log .e{color:var(--danger)}.log .ok{color:var(--brand2)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:8px;padding:8px 12px;font-weight:600;font-size:12.5px;border:1px solid var(--line2);background:var(--panel2);color:var(--ink)}
+.btn.pri{background:var(--brand);border-color:var(--brand);color:#fff}
+.btn.danger{color:var(--danger)}
+.btns{display:flex;gap:8px;margin-top:10px}.btns .btn{flex:1}
+.tracks{display:grid;gap:6px}
+.tr{display:grid;grid-template-columns:36px 1fr auto;gap:8px;align-items:center;padding:6px 8px;border-radius:8px;border:1px solid var(--line);cursor:pointer}
+.tr:hover{background:var(--panel2)}
+.tr .th{width:36px;height:36px;border-radius:6px;background:#2b3a44;position:relative}
+.tr .th::after{content:"";position:absolute;left:10px;top:7px;width:16px;height:16px;border-radius:50%;background:#c9a07a}
+.tr .th.car::after{left:6px;top:11px;width:24px;height:12px;border-radius:3px;background:#7c8ea0}
+.tr .n{font-weight:600;font-size:12px}.tr .d{font-family:var(--mono);font-size:10.5px;color:var(--ink3)}
+.tog{width:34px;height:20px;border-radius:10px;background:var(--mask);position:relative}
+.tog::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}
+.tog.on{background:var(--protect)}.tog.on::after{left:16px}
+.tog.rev{background:var(--review)}
+.refs{display:flex;gap:6px;flex-wrap:wrap}
+.ref{width:52px;height:52px;border-radius:8px;background:#2b3a44;position:relative;border:2px solid var(--protect)}
+.ref::after{content:"";position:absolute;left:16px;top:12px;width:20px;height:20px;border-radius:50%;background:#c9a07a}
+.ref.add{border:1.5px dashed var(--line2);background:none;display:grid;place-items:center;color:var(--ink3);font-size:18px}
+.ref.add::after{display:none}
+.field{display:grid;gap:4px;margin-bottom:10px}
+.field label{font-size:11.5px;color:var(--ink2)}
+.field input,.field select{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--ink);font:inherit;font-size:12px}
+.seg{display:flex;background:var(--panel2);border-radius:8px;padding:3px}
+.seg button{flex:1;padding:6px;border-radius:6px;font-size:12px;color:var(--ink2)}
+.seg button.on{background:var(--panel);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.range{width:100%;accent-color:var(--brand2)}
+.note{font-size:11.5px;color:var(--ink3);line-height:1.5}
+.chk{display:flex;align-items:center;gap:8px;font-size:12.5px;padding:4px 0}
+.chk input{accent-color:var(--brand2)}
+
+.tl{grid-area:tl;border-top:1px solid var(--line);background:var(--panel);display:grid;grid-template-columns:150px 1fr;min-height:0}
+.tlh{border-right:1px solid var(--line);font-size:11.5px}
+.tlh div,.lane{height:26px;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid var(--line)}
+.tlh div{color:var(--ink2);gap:6px}
+.tlh div i{width:8px;height:8px;border-radius:2px}
+.tlbody{position:relative;overflow:hidden}
+.ruler{height:26px;position:relative;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:10px;color:var(--ink3)}
+.ruler span{position:absolute;top:6px;transform:translateX(-50%)}
+.lane{position:relative;padding:0}
+.seg2{position:absolute;top:7px;height:12px;border-radius:3px;opacity:.9}
+.seg2.mask{background:var(--mask)}.seg2.protect{background:var(--protect)}.seg2.review{background:var(--review)}
+.seg2.gap{background:none;border:1.5px dashed var(--review);opacity:1}
+.playhead{position:absolute;top:0;bottom:0;left:36%;width:1px;background:#fff;opacity:.8;pointer-events:none}
+.playhead::before{content:"";position:absolute;top:0;left:-5px;border:5px solid transparent;border-top:7px solid #fff}
+
+.report{position:absolute;inset:0;background:rgba(10,12,16,.82);display:grid;place-items:center;padding:20px;overflow:auto}
+.rp{width:100%;max-width:640px;background:#fff;color:#1a1f28;border-radius:10px;padding:22px 26px;font-size:12px;box-shadow:0 12px 40px rgba(0,0,0,.4)}
+.rhead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;border-bottom:2px solid #0E7A57;padding-bottom:10px;margin-bottom:12px}
+.rt{font-size:16px;font-weight:700}.rs{font-family:var(--mono);font-size:10.5px;color:#6f7785;margin-top:3px}
+.rbadge{white-space:nowrap;font-size:11px;font-weight:600;color:#0E7A57;border:1px solid #0E7A57;border-radius:6px;padding:4px 8px}
+.rgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px}
+.rgrid div{line-height:1.5}.rgrid b{display:block;font-size:10.5px;color:#6f7785;font-weight:600}
+.rsign{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px;border-top:1px solid #d9dee5;padding-top:12px}
+.rsign div{border:1px solid #d9dee5;border-radius:6px;padding:8px}
+.rsign span{display:block;font-size:10.5px;color:#6f7785}.rsign em{font-style:normal;font-weight:600;font-size:12px}
+.toast{position:fixed;left:50%;bottom:180px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line2);padding:8px 14px;border-radius:8px;font-size:12.5px;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.show{opacity:1}
+@media (max-width:1100px){.app{grid-template-columns:220px 1fr 280px}}
+@media (max-width:820px){
+  .app{grid-template-rows:48px 1fr auto 140px;grid-template-columns:1fr;grid-template-areas:"top" "stage" "side" "tl"}
+  .queue{display:none}.stepper .step span{display:none}.side{max-height:280px}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="logo"><i>✦</i>NuriBlur <small>v0.1 목업</small></div>
+    <nav class="stepper" id="stepper">
+      <button class="step cur" data-step="1"><b>1</b><span>입력</span></button>
+      <button class="step" data-step="2"><b>2</b><span>분석</span></button>
+      <button class="step" data-step="3"><b>3</b><span>보호대상 선택</span></button>
+      <button class="step" data-step="4"><b>4</b><span>검수</span></button>
+      <button class="step" data-step="5"><b>5</b><span>내보내기</span></button>
+      <button class="step" data-step="6"><b>6</b><span>결재·리포트</span></button>
+    </nav>
+    <div class="topright">
+      <span class="pill gpu">RTX 4060 · CUDA</span>
+      <span class="pill">로컬 처리 · 외부 전송 없음</span>
+    </div>
+  </header>
+
+  <aside class="queue">
+    <div class="ph">작업 큐 <button>+ 파일 추가</button></div>
+    <div class="drop"><strong>영상을 여기에 끌어다 놓기</strong>MP4 · MOV · MKV · AVI · TS</div>
+    <div class="urlrow"><input placeholder="https:// 동영상 주소 붙여넣기"><button>가져오기</button></div>
+    <div class="jobs">
+      <div class="job sel"><div class="thumb"></div><div><div class="t">강남역_거리촬영_0928.mp4</div><div class="m"><span>1080p</span><span>12:34</span><span class="st a">분석중 61%</span></div></div></div>
+      <div class="job"><div class="thumb"></div><div><div class="t">사옥로비_인터뷰_B컷.mov</div><div class="m"><span>4K</span><span>08:12</span><span class="st r">검수 3건</span></div></div></div>
+      <div class="job"><div class="thumb"></div><div><div class="t">blackbox_20260927_1742.mp4</div><div class="m"><span>1080p</span><span>03:00</span><span class="st q">대기</span></div></div></div>
+      <div class="job"><div class="thumb"></div><div><div class="t">youtube_dl_a8f3.mp4</div><div class="m"><span>1080p</span><span>21:05</span><span class="st d">완료</span></div></div></div>
+    </div>
+  </aside>
+
+  <main class="stage">
+    <div class="canvaswrap">
+      <div class="canvas">
+        <svg viewBox="0 0 960 540" id="scene" aria-label="영상 프레임 미리보기">
+          <defs>
+            <pattern id="mosaicp" width="10" height="10" patternUnits="userSpaceOnUse">
+              <rect width="5" height="5" fill="#8f8a84"/><rect x="5" y="5" width="5" height="5" fill="#8f8a84"/>
+              <rect x="5" width="5" height="5" fill="#6b6d72"/><rect y="5" width="5" height="5" fill="#a39b93"/>
+            </pattern>
+            <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b3647"/><stop offset="1" stop-color="#55606f"/></linearGradient>
+          </defs>
+          <rect width="960" height="540" fill="url(#sky)"/>
+          <rect x="0" y="330" width="960" height="210" fill="#3c3f45"/>
+          <rect x="0" y="330" width="960" height="6" fill="#9aa0a8"/>
+          <g fill="#5b6472"><rect x="40" y="110" width="150" height="222"/><rect x="230" y="60" width="200" height="272"/><rect x="470" y="140" width="120" height="192"/><rect x="630" y="90" width="300" height="242"/></g>
+          <g fill="#c7ccd4" opacity=".5"><rect x="60" y="130" width="22" height="30"/><rect x="100" y="130" width="22" height="30"/><rect x="260" y="90" width="26" height="36"/><rect x="310" y="90" width="26" height="36"/><rect x="360" y="90" width="26" height="36"/><rect x="660" y="120" width="30" height="40"/><rect x="720" y="120" width="30" height="40"/><rect x="780" y="120" width="30" height="40"/><rect x="840" y="120" width="30" height="40"/></g>
+          <!-- car -->
+          <g id="car"><rect x="560" y="360" width="300" height="110" rx="18" fill="#6f7f93"/><rect x="600" y="330" width="200" height="60" rx="14" fill="#8ea0b5"/><circle cx="620" cy="470" r="26" fill="#1c1f24"/><circle cx="800" cy="470" r="26" fill="#1c1f24"/><rect x="665" y="430" width="90" height="26" rx="3" fill="#e9eef2" id="plateRect"/><text x="710" y="449" font-size="16" text-anchor="middle" font-family="JetBrains Mono,monospace" fill="#111" id="plateText">12가 3456</text></g>
+          <!-- people -->
+          <g id="p1"><rect x="150" y="300" width="60" height="150" rx="14" fill="#8b5e3c"/><circle cx="180" cy="280" r="26" fill="#d9ab86" id="face1"/></g>
+          <g id="p2"><rect x="330" y="290" width="64" height="170" rx="14" fill="#3a5d8c"/><circle cx="362" cy="266" r="28" fill="#c9a07a" id="face2"/></g>
+          <g id="p3"><rect x="420" y="320" width="50" height="130" rx="12" fill="#5c6b5a"/><circle cx="445" cy="302" r="22" fill="#e3c3a2" id="face3"/></g>
+          <g id="p4"><rect x="895" y="340" width="40" height="110" rx="10" fill="#7a4e62"/><circle cx="915" cy="325" r="18" fill="#d2a983" id="face4"/></g>
+          <!-- mosaic overlays (step 4/5 preview) -->
+          <g id="mosaics" class="hidden">
+            <rect class="mosaic" x="150" y="250" width="60" height="60"/>
+            <rect class="mosaic" x="421" y="278" width="50" height="50"/>
+            <rect class="mosaic" x="895" y="305" width="42" height="42"/>
+            <rect class="mosaic" x="660" y="425" width="100" height="36"/>
+          </g>
+          <!-- boxes -->
+          <g id="boxes" class="hidden">
+            <g class="bx mask" data-id="7" data-kind="face"><rect x="150" y="250" width="60" height="60"/><rect class="tag" x="150" y="238" width="38" height="13" rx="2"/><text x="153" y="248">F#7</text></g>
+            <g class="bx protect" data-id="3" data-kind="face"><rect x="330" y="234" width="64" height="64"/><rect class="tag" x="330" y="222" width="52" height="13" rx="2"/><text x="333" y="232">F#3 ✓</text></g>
+            <g class="bx review" data-id="12" data-kind="face"><rect x="421" y="278" width="50" height="50"/><rect class="tag" x="421" y="266" width="44" height="13" rx="2"/><text x="424" y="276">F#12 ?</text></g>
+            <g class="bx mask" data-id="19" data-kind="face"><rect x="895" y="305" width="42" height="42"/><rect class="tag" x="895" y="293" width="40" height="13" rx="2"/><text x="898" y="303">F#19</text></g>
+            <g class="bx mask" data-id="4" data-kind="plate"><rect x="660" y="425" width="100" height="36"/><rect class="tag" x="660" y="413" width="38" height="13" rx="2"/><text x="663" y="423">P#4</text></g>
+          </g>
+        </svg>
+        <div class="report hidden" id="reportView">
+          <div class="rp">
+            <div class="rhead"><div><div class="rt">영상 비식별 처리 결과 보고서</div><div class="rs">NB-2026-1001-007 · 강남역_거리촬영_0928.mp4 · 2026-10-01 14:21</div></div><div class="rbadge">재검사 통과 · 노출 0건</div></div>
+            <div class="rgrid">
+              <div><b>처리 근거</b>개인정보보호법 제35조 열람 청구 (접수 2026-0928-113)</div>
+              <div><b>청구인(보호대상)</b>F#3 · 담당자 클릭 지정 + 참조사진 일치 0.78</div>
+              <div><b>마스킹 처리</b>얼굴 36 · 전신 41 · 번호판 12 트랙 / 픽셀화 8px, 여백 1.25×</div>
+              <div><b>검수</b>3건 처리 (병합 1 · 수동 박스 1 · OCR 확인 1)</div>
+              <div><b>노출 재검사</b>출력본을 검출기로 재검사: 보호대상 외 얼굴·번호판 검출 0건</div>
+              <div><b>출력 파일</b>강남역_거리촬영_0928_blur.mp4 · SHA-256 3f9a…c21e · 메타데이터 제거</div>
+            </div>
+            <div class="rsign" id="rSignRow"></div>
+          </div>
+        </div>
+        <div class="hud"><span id="hudFrame">00:04:32.08 · f 6525 / 18,000</span><span>1920×1080 · 29.97</span></div>
+        <div class="legend" id="legend"><span><i style="background:var(--mask)"></i>마스킹</span><span><i style="background:var(--protect)"></i>보호</span><span><i style="background:var(--review)"></i>검수 필요</span></div>
+      </div>
+    </div>
+    <div class="transport">
+      <button aria-label="이전 프레임">‹</button><button aria-label="재생">▶</button><button aria-label="다음 프레임">›</button>
+      <span>00:04:32</span><div class="bar"><i></i><b></b></div><span>12:34</span>
+      <span id="viewMode" style="color:var(--ink3)">원본</span>
+    </div>
+  </main>
+
+  <aside class="side">
+    <!-- 1 입력 -->
+    <section class="panel on" data-panel="1">
+      <div class="sec"><h3>선택한 영상</h3>
+        <div class="row"><span class="k">파일</span><span class="v">강남역_거리촬영_0928.mp4</span></div>
+        <div class="row"><span class="k">코덱</span><span class="v">H.264 · yuv420p</span></div>
+        <div class="row"><span class="k">해상도 · FPS</span><span class="v">1920×1080 · 29.97 (CFR)</span></div>
+        <div class="row"><span class="k">길이 · 프레임</span><span class="v">12:34 · 22,616</span></div>
+        <div class="row"><span class="k">오디오</span><span class="v">AAC 48k 스테레오 · 유지</span></div>
+      </div>
+      <div class="sec"><h3>검출 대상</h3>
+        <label class="chk"><input type="checkbox" checked> 사람 얼굴</label>
+        <label class="chk"><input type="checkbox" checked> 사람 전신 (얼굴 가림 시 보조)</label>
+        <label class="chk"><input type="checkbox" checked> 자동차 번호판 (국내 모델)</label>
+        <label class="chk"><input type="checkbox"> 간판·상호 (V2)</label>
+      </div>
+      <div class="sec"><h3>처리 프로파일</h3>
+        <div class="seg"><button class="on">GPU 정밀</button><button>GPU 빠름</button><button>CPU</button></div>
+        <p class="note" style="margin:8px 0 0">YOLOX-s + ArcFace · 검출 간격 2프레임 · 예상 분석 시간 약 5분</p>
+        <div class="btns"><button class="btn pri" id="startBtn">분석 시작</button></div>
+      </div>
+    </section>
+
+    <!-- 2 분석 -->
+    <section class="panel" data-panel="2">
+      <div class="sec"><h3>진행 상황</h3>
+        <div class="row"><span class="k" id="stageLabel">검출 · 추적 중</span><span class="v" id="pct">61%</span></div>
+        <div class="prog"><i id="progBar" style="width:61%"></i></div>
+        <div class="row"><span class="k">남은 시간</span><span class="v" id="eta">02:48</span></div>
+        <div class="stages" id="stageList">
+          <div class="sg done"><i></i>입수 · 메타 확인</div>
+          <div class="sg done"><i></i>디코딩 (NVDEC)</div>
+          <div class="sg run"><i></i>검출 · 추적</div>
+          <div class="sg"><i></i>얼굴 임베딩 · 번호판 OCR</div>
+          <div class="sg"><i></i>트랙 저장 (.nbproj)</div>
+        </div>
+        <div class="btns"><button class="btn" id="pauseBtn">일시정지</button><button class="btn danger">취소</button></div>
+      </div>
+      <div class="sec"><h3>처리 성능</h3>
+        <div class="gauges">
+          <div class="g"><div class="n" id="fps">72.4</div><div class="l">분석 FPS</div></div>
+          <div class="g"><div class="n" id="gpu">81%</div><div class="l">GPU</div></div>
+          <div class="g"><div class="n">3.1 GB</div><div class="l">VRAM</div></div>
+        </div>
+      </div>
+      <div class="sec"><h3>검출 현황</h3>
+        <div class="counts">
+          <div class="c"><div class="n" id="cFace">37</div><div class="l">얼굴 트랙</div></div>
+          <div class="c"><div class="n" id="cPerson">41</div><div class="l">전신 트랙</div></div>
+          <div class="c"><div class="n" id="cPlate">12</div><div class="l">번호판 트랙</div></div>
+        </div>
+      </div>
+      <div class="sec"><h3>로그</h3>
+        <div class="log" id="log">[14:02:11] <span class="ok">INFO</span>  ffprobe: h264 1920x1080 29.97 CFR
+[14:02:12] <span class="ok">INFO</span>  decoder: NVDEC 사용
+[14:02:13] <span class="ok">INFO</span>  model: yolox-s-fp16 (faces·persons·plates-kr)
+[14:02:40] <span class="w">WARN</span>  f 3,120~3,131 번호판 저신뢰 0.31 → 추적 보간
+[14:03:05] <span class="ok">INFO</span>  tracks: F37 P41 LP12 (ID 스위치 2건)
+</div>
+      </div>
+    </section>
+
+    <!-- 3 보호대상 -->
+    <section class="panel" data-panel="3">
+      <div class="sec"><h3>보호대상 (마스킹 제외)</h3>
+        <p class="note" style="margin:0 0 8px">기본은 모두 가립니다. 화면의 박스를 클릭하거나 아래에서 켜면 해당 트랙 전체 구간이 보호됩니다.</p>
+        <div class="counts">
+          <div class="c p"><div class="n" id="nProt">1</div><div class="l">보호</div></div>
+          <div class="c"><div class="n" id="nMask">3</div><div class="l">마스킹</div></div>
+          <div class="c w"><div class="n" id="nRev">1</div><div class="l">검수 필요</div></div>
+        </div>
+      </div>
+      <div class="sec"><h3>이 프레임의 트랙</h3>
+        <div class="tracks" id="trackList">
+          <div class="tr" data-id="3"><div class="th"></div><div><div class="n">F#3 · 얼굴</div><div class="d">00:00–12:34 · 참조사진 일치 0.78</div></div><button class="tog on" aria-label="보호 토글"></button></div>
+          <div class="tr" data-id="7"><div class="th"></div><div><div class="n">F#7 · 얼굴</div><div class="d">04:10–05:02 · 미등록</div></div><button class="tog" aria-label="보호 토글"></button></div>
+          <div class="tr" data-id="12"><div class="th"></div><div><div class="n">F#12 · 얼굴 <span style="color:var(--review)">⚠ 끊김</span></div><div class="d">04:28–04:41 · F#3과 유사 0.52</div></div><button class="tog rev" aria-label="보호 토글"></button></div>
+          <div class="tr" data-id="19"><div class="th"></div><div><div class="n">F#19 · 얼굴</div><div class="d">04:30–04:35 · 미등록</div></div><button class="tog" aria-label="보호 토글"></button></div>
+          <div class="tr" data-id="4"><div class="th car"></div><div><div class="n">P#4 · 번호판</div><div class="d">04:20–04:50 · OCR 12가3456</div></div><button class="tog" aria-label="보호 토글"></button></div>
+        </div>
+      </div>
+      <div class="sec"><h3>참조 사진으로 지정</h3>
+        <div class="refs"><div class="ref"></div><div class="ref"></div><div class="ref add">+</div></div>
+        <p class="note" style="margin:8px 0 0">본인 사진 2장 등록됨 · 유사도 임계 0.55 · 일치 트랙 1개 (F#3)</p>
+      </div>
+      <div class="sec"><h3>번호판으로 지정</h3>
+        <div class="field"><input placeholder="예: 12가3456 (쉼표로 여러 개)"></div>
+        <div class="btns"><button class="btn">번호판 추가</button><button class="btn">영역 제외 그리기</button></div>
+      </div>
+    </section>
+
+    <!-- 4 검수 -->
+    <section class="panel" data-panel="4">
+      <div class="sec"><h3>검수 필요 3건</h3>
+        <div class="tracks">
+          <div class="tr" data-id="12"><div class="th"></div><div><div class="n">F#12 · 추적 끊김</div><div class="d">F#3과 같은 사람? 병합하면 보호됨</div></div><button class="btn" style="padding:4px 8px" id="mergeBtn">병합</button></div>
+          <div class="tr"><div class="th car"></div><div><div class="n">P#9 · OCR 불일치</div><div class="d">31너1197 / 31나1197 · 06:12</div></div><button class="btn" style="padding:4px 8px">보기</button></div>
+          <div class="tr"><div class="th"></div><div><div class="n">누락 의심 · 09:40–09:44</div><div class="d">전신 검출됨, 얼굴 미검출 (뒷모습?)</div></div><button class="btn" style="padding:4px 8px">보기</button></div>
+        </div>
+      </div>
+      <div class="sec"><h3>수동 보정</h3>
+        <div class="btns"><button class="btn">+ 수동 박스</button><button class="btn">이 구간 전신 마스킹</button></div>
+        <p class="note" style="margin:8px 0 0">수동 박스는 시작·끝 2개 키프레임만 찍으면 사이를 보간합니다.</p>
+      </div>
+      <div class="sec"><h3>미리보기</h3>
+        <div class="seg" id="previewSeg"><button class="on" data-v="orig">원본</button><button data-v="mask">마스킹 결과</button><button data-v="split">좌우 비교</button></div>
+      </div>
+    </section>
+
+    <!-- 5 내보내기 -->
+    <section class="panel" data-panel="5">
+      <div class="sec"><h3>마스킹 스타일</h3>
+        <div class="seg" id="styleSeg"><button class="on">픽셀화</button><button>블러</button><button>단색</button><button>세그먼트</button></div>
+        <div class="field" style="margin-top:10px"><label>강도 (블록 = 얼굴 폭 / 8, 최소 8px)</label><input type="range" class="range" min="4" max="16" value="8"></div>
+        <div class="field"><label>여백 확장 ×1.25 · 앞뒤 패딩 5프레임</label><input type="range" class="range" min="100" max="160" value="125"></div>
+      </div>
+      <div class="sec"><h3>출력</h3>
+        <div class="field"><label>코덱</label><select><option>원본과 동일 (H.264 NVENC)</option><option>HEVC NVENC</option><option>H.264 소프트웨어</option></select></div>
+        <div class="field"><label>품질</label><select><option>원본 비트레이트 근사 (12 Mbps)</option><option>높음</option><option>보통</option></select></div>
+        <label class="chk"><input type="checkbox" checked> 오디오 그대로 유지</label>
+        <label class="chk"><input type="checkbox" checked> GPS·촬영일시 등 메타데이터 제거</label>
+        <label class="chk"><input type="checkbox"> 감사 로그(.json) 함께 저장</label>
+        <div class="field"><label>저장 위치</label><input value="D:\출력\강남역_거리촬영_0928_blur.mp4"></div>
+        <div class="btns"><button class="btn pri" id="renderBtn">내보내기 시작</button></div>
+        <p class="note" style="margin:8px 0 0">보호대상 1 · 마스킹 트랙 88 · 예상 렌더링 1분 40초. 내보내기 후 결과를 검출기로 재검사해 노출이 없으면 완료로 표시합니다.</p>
+      </div>
+    </section>
+
+    <!-- 6 기관 모드: 결재·리포트 -->
+    <section class="panel" data-panel="6">
+      <div class="sec"><h3>처리 건 정보</h3>
+        <div class="row"><span class="k">접수번호</span><span class="v">2026-0928-113</span></div>
+        <div class="row"><span class="k">처리 근거</span><span class="v">개인정보보호법 §35 열람</span></div>
+        <div class="row"><span class="k">청구인</span><span class="v">홍○○ (F#3)</span></div>
+        <div class="row"><span class="k">담당자 · 승인자</span><span class="v">김형남 · 이규홍</span></div>
+      </div>
+      <div class="sec"><h3>결재선 설정 (기관 설정)</h3>
+        <div class="field"><label>결재 단계</label><select id="apprPreset"><option value="2">2단: 담당자 검수 → 승인자</option><option value="3" selected>3단: 담당자 검수 → 팀장 → 부서장</option><option value="4">4단: 담당자 검수 → 팀장 → 부서장 → 개인정보보호책임자</option></select></div>
+        <div class="field"><label>결재자 (단계 순, 쉼표 구분)</label><input id="apprNames" value="김형남, 박문화, 이규홍"></div>
+        <p class="note">기관 관리자가 저장하면 이 기관의 모든 처리 건에 적용됩니다. 단계마다 승인·반려·결재 의견이 감사 로그에 남습니다.</p>
+        <div class="btns"><button class="btn" id="apprSave">결재선 저장</button></div>
+      </div>
+      <div class="sec"><h3>결재 단계</h3>
+        <div class="stages" id="apprList"></div>
+        <div class="field" style="margin-top:10px"><label>결재 의견</label><input placeholder="예: 번호판 P#9 OCR 확인 완료, 승인"></div>
+        <div class="btns"><button class="btn pri" id="approveBtn">승인</button><button class="btn danger" id="rejectBtn">반려 (검수로 되돌림)</button></div>
+      </div>
+      <div class="sec"><h3>출력 제공</h3>
+        <label class="chk"><input type="checkbox" checked> 결과 보고서 PDF 첨부</label>
+        <label class="chk"><input type="checkbox" checked> 출력본 해시(SHA-256) 기록</label>
+        <label class="chk"><input type="checkbox"> 열람 전용 워터마크 (접수번호·일시)</label>
+        <div class="field"><label>보관 기간</label><select><option>90일 후 자동 삭제 (기관 설정)</option><option>180일</option><option>영구 (법령 근거 입력)</option></select></div>
+        <div class="btns"><button class="btn" id="pdfBtn">보고서 PDF 저장</button><button class="btn" id="outBtn" disabled style="opacity:.5">출력본 제공</button></div>
+      </div>
+      <div class="sec"><h3>감사 로그</h3>
+        <div class="log" id="audit">[10-01 13:40:02] 김형남   작업 생성 · 접수 2026-0928-113
+[10-01 13:46:15] 시스템   분석 완료 · F37 P41 LP12
+[10-01 13:52:40] 김형남   보호대상 지정 · F#3 (클릭)
+[10-01 13:58:03] 김형남   병합 · F#12 → F#3
+[10-01 14:05:21] 김형남   수동 박스 추가 · 09:40–09:44
+[10-01 14:08:30] 김형남   검수 완료 · 승인 요청 → 이규홍
+[10-01 14:10:12] 시스템   렌더링 완료 · 재검사 노출 0건
+</div>
+      </div>
+    </section>
+  </aside>
+
+  <footer class="tl">
+    <div class="tlh">
+      <div style="color:var(--ink3)">트랙 레인</div>
+      <div><i style="background:var(--protect)"></i>F#3 보호</div>
+      <div><i style="background:var(--mask)"></i>F#7</div>
+      <div><i style="background:var(--review)"></i>F#12 검수</div>
+      <div><i style="background:var(--mask)"></i>P#4 번호판</div>
+    </div>
+    <div class="tlbody">
+      <div class="ruler"><span style="left:0%">0:00</span><span style="left:16%">2:00</span><span style="left:32%">4:00</span><span style="left:48%">6:00</span><span style="left:64%">8:00</span><span style="left:80%">10:00</span><span style="left:96%">12:00</span></div>
+      <div class="lane"><div class="seg2 protect" style="left:2%;width:33%"></div><div class="seg2 gap" style="left:35.2%;width:1.6%"></div><div class="seg2 protect" style="left:37%;width:60%"></div></div>
+      <div class="lane"><div class="seg2 mask" style="left:33%;width:7%"></div></div>
+      <div class="lane"><div class="seg2 review" style="left:35.5%;width:1.8%"></div></div>
+      <div class="lane"><div class="seg2 mask" style="left:34.5%;width:4%"></div><div class="seg2 mask" style="left:61%;width:3%"></div></div>
+      <div class="playhead"></div>
+    </div>
+  </footer>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  const steps=[...document.querySelectorAll('.step')], panels=[...document.querySelectorAll('.panel')];
+  const boxes=document.getElementById('boxes'), mosaics=document.getElementById('mosaics'), legend=document.getElementById('legend');
+  const toast=document.getElementById('toast'); let tt;
+  function say(m){toast.textContent=m;toast.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>toast.classList.remove('show'),1800)}
+  let cur=1, timer=null, pct=61, rendering=false;
+
+  function go(n){
+    cur=n;
+    steps.forEach(s=>{const k=+s.dataset.step;s.classList.toggle('cur',k===n);s.classList.toggle('done',k<n)});
+    panels.forEach(p=>p.classList.toggle('on',+p.dataset.panel===n));
+    boxes.classList.toggle('hidden',!(n===3||n===4));
+    mosaics.classList.toggle('hidden',!(n===5||n===6));
+    legend.classList.toggle('hidden',!(n===3||n===4));
+    document.getElementById('reportView').classList.toggle('hidden',n!==6);
+    document.getElementById('viewMode').textContent=n===5?'마스킹 미리보기':n===6?'결과 보고서':'원본';
+    if(n===2) startSim(); else stopSim();
+  }
+  steps.forEach(s=>s.addEventListener('click',()=>go(+s.dataset.step)));
+  document.getElementById('startBtn').addEventListener('click',()=>{pct=0;go(2);say('분석을 시작했습니다')});
+
+  // simulated analysis progress
+  const stageEls=[...document.querySelectorAll('#stageList .sg')];
+  function startSim(){
+    stopSim();
+    timer=setInterval(()=>{
+      if(paused) return;
+      pct=Math.min(100,pct+0.6);
+      document.getElementById('progBar').style.width=pct+'%';
+      document.getElementById('pct').textContent=Math.round(pct)+'%';
+      const left=Math.round((100-pct)/100*(rendering?100:430));
+      document.getElementById('eta').textContent=String(Math.floor(left/60)).padStart(2,'0')+':'+String(left%60).padStart(2,'0');
+      document.getElementById('fps').textContent=(rendering?118:68+Math.random()*9).toFixed(1);
+      document.getElementById('gpu').textContent=Math.round(74+Math.random()*14)+'%';
+      const f=Math.round(pct/100*22616);
+      document.getElementById('hudFrame').textContent=`f ${f.toLocaleString()} / 22,616`;
+      if(!rendering){
+        document.getElementById('cFace').textContent=Math.round(20+pct*0.28);
+        document.getElementById('cPerson').textContent=Math.round(22+pct*0.31);
+        document.getElementById('cPlate').textContent=Math.round(4+pct*0.13);
+        let idx=pct<8?1:pct<78?2:pct<94?3:4;
+        stageEls.forEach((e,i)=>{e.classList.toggle('done',i<idx);e.classList.toggle('run',i===idx)});
+        document.getElementById('stageLabel').textContent=['입수','디코딩','검출 · 추적 중','임베딩 · OCR 중','트랙 저장 중'][idx];
+      }
+      if(pct>=100){
+        stopSim();
+        stageEls.forEach(e=>{e.classList.add('done');e.classList.remove('run')});
+        if(rendering){rendering=false;document.getElementById('stageLabel').textContent='노출 재검사 통과 · 완료';say('내보내기 완료 — 재검사에서 노출 0건 · 결재 단계로 이동');setTimeout(()=>go(6),900);}
+        else{document.getElementById('stageLabel').textContent='분석 완료';say('분석 완료 — 보호대상을 선택하세요');setTimeout(()=>go(3),900);}
+      }
+    },120);
+  }
+  function stopSim(){clearInterval(timer);timer=null}
+  let paused=false;
+  document.getElementById('pauseBtn').addEventListener('click',e=>{paused=!paused;e.target.textContent=paused?'재개':'일시정지';say(paused?'일시정지 — 처리된 트랙은 보존됩니다':'재개')});
+
+  // protect toggles
+  const state={3:'protect',7:'mask',12:'review',19:'mask',4:'mask'};
+  function paint(){
+    document.querySelectorAll('#boxes .bx').forEach(b=>{const id=b.dataset.id;b.className.baseVal='bx '+state[id];
+      const t=b.querySelector('text');const base=t.textContent.replace(/ [✓?]$/,'');t.textContent=base+(state[id]==='protect'?' ✓':state[id]==='review'?' ?':'')});
+    document.querySelectorAll('#trackList .tr').forEach(r=>{const id=r.dataset.id;const g=r.querySelector('.tog');g.className='tog'+(state[id]==='protect'?' on':state[id]==='review'?' rev':'')});
+    const vals=Object.values(state);
+    document.getElementById('nProt').textContent=vals.filter(v=>v==='protect').length;
+    document.getElementById('nMask').textContent=vals.filter(v=>v==='mask').length;
+    document.getElementById('nRev').textContent=vals.filter(v=>v==='review').length;
+    const m=mosaics.children;[m[0],m[1],m[2],m[3]].forEach((el,i)=>{const id=[7,12,19,4][i];el.style.display=state[id]==='protect'?'none':''});
+  }
+  function toggle(id){state[id]=state[id]==='protect'?'mask':'protect';paint();say(state[id]==='protect'?`트랙 #${id} 전 구간을 보호대상으로 지정했습니다`:`트랙 #${id}를 다시 마스킹합니다`)}
+  document.querySelectorAll('#boxes .bx').forEach(b=>b.addEventListener('click',()=>toggle(b.dataset.id)));
+  document.querySelectorAll('#trackList .tr').forEach(r=>r.addEventListener('click',()=>toggle(r.dataset.id)));
+  document.getElementById('mergeBtn').addEventListener('click',e=>{e.stopPropagation();state[12]='protect';paint();say('F#12를 F#3에 병합 — 보호대상으로 승계');});
+  paint();
+
+  // preview segment
+  document.getElementById('previewSeg').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+    [...e.currentTarget.children].forEach(x=>x.classList.toggle('on',x===b));
+    mosaics.classList.toggle('hidden',b.dataset.v==='orig');document.getElementById('viewMode').textContent=b.textContent});
+  document.getElementById('styleSeg').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;[...e.currentTarget.children].forEach(x=>x.classList.toggle('on',x===b));say(b.textContent+' 스타일 적용 (재분석 없이 렌더링만)')});
+  document.getElementById('renderBtn').addEventListener('click',()=>{rendering=true;pct=0;go(2);stageEls.forEach(e=>{e.classList.remove('run');e.classList.add('done')});document.getElementById('stageLabel').textContent='렌더링 · 인코딩 중 (NVENC)';say('내보내기 시작 — 트랙 캐시 재사용')});
+  // 기관 모드: 결재선 설정 + 결재·리포트
+  const audit=document.getElementById('audit');
+  const roleSets={2:['담당자 검수','승인자'],3:['담당자 검수','팀장','부서장'],4:['담당자 검수','팀장','부서장','개인정보보호책임자']};
+  let line=[], curIdx=1, provided=false; // line[0]=담당자(검수 완료 상태), curIdx=현재 결재 대기 단계
+  function stamp(who,what){const d=new Date();const t=`[10-01 ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}]`;audit.textContent+=`${t} ${who.padEnd(4,' ')}   ${what}\n`;audit.scrollTop=audit.scrollHeight}
+  function buildLine(){
+    const n=+document.getElementById('apprPreset').value;
+    const names=document.getElementById('apprNames').value.split(',').map(s=>s.trim()).filter(Boolean);
+    line=roleSets[n].map((role,i)=>({role,name:names[i]||'(미지정)',done:i===0,when:i===0?'10-01 14:08':''}));
+    curIdx=1;provided=false;renderLine();
+  }
+  function renderLine(){
+    const list=document.getElementById('apprList');list.innerHTML='';
+    const add=(txt,cls)=>{const d=document.createElement('div');d.className='sg '+cls;d.innerHTML='<i></i>'+txt;list.appendChild(d)};
+    add('청구인 지정 · 보호대상 확정','done');
+    line.forEach((s,i)=>add(`${s.role} · ${s.name}${s.done?' ✓':''}`, s.done?'done':(i===curIdx&&!provided?'run':'')));
+    add('출력 제공 · 보관', provided?'done':(curIdx>=line.length?'run':''));
+    const row=document.getElementById('rSignRow');row.innerHTML='';
+    row.style.gridTemplateColumns=`repeat(${line.length+1},1fr)`;
+    line.forEach(s=>{const d=document.createElement('div');d.innerHTML=`<span>${s.role}</span><em>${s.done?s.name+' · '+s.when:'대기'}</em>`;row.appendChild(d)});
+    const o=document.createElement('div');o.innerHTML=`<span>출력 제공</span><em>${provided?'제공 완료 · 90일 보관':'—'}</em>`;row.appendChild(o);
+    const ob=document.getElementById('outBtn');const ready=curIdx>=line.length&&!provided;ob.disabled=!ready;ob.style.opacity=ready?1:.5;
+    const ab=document.getElementById('approveBtn');ab.textContent=curIdx<line.length?`승인 (${line[curIdx].role} · ${line[curIdx].name})`:'결재 완료';ab.disabled=curIdx>=line.length;ab.style.opacity=curIdx<line.length?1:.5;
+  }
+  document.getElementById('apprSave').addEventListener('click',()=>{buildLine();stamp('관리자',`결재선 변경 · ${line.map(s=>s.role).join(' → ')}`);say(`결재선 ${line.length}단으로 저장됨`)});
+  document.getElementById('apprPreset').addEventListener('change',e=>{const n=+e.target.value;const names=['김형남','박문화','이규홍','정성우'].slice(0,n);document.getElementById('apprNames').value=names.join(', ')});
+  document.getElementById('approveBtn').addEventListener('click',()=>{
+    if(curIdx>=line.length)return;const s=line[curIdx];const d=new Date();s.done=true;s.when=`10-01 ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;curIdx++;renderLine();
+    stamp(s.name,`승인 (${s.role})${curIdx<line.length?' → '+line[curIdx].name+' 결재 요청':' · 출력 제공 가능'}`);
+    say(curIdx<line.length?`${s.role} 승인 — 다음: ${line[curIdx].role} ${line[curIdx].name}`:'최종 승인 완료 — 출력본 제공이 활성화되었습니다');
+  });
+  document.getElementById('rejectBtn').addEventListener('click',()=>{
+    const s=line[Math.min(curIdx,line.length-1)];line.forEach((x,i)=>{if(i>0){x.done=false;x.when=''}});curIdx=1;provided=false;renderLine();
+    stamp(s.name,`반려 (${s.role}) · 검수 단계로 되돌림`);say('반려 — 검수 단계로 돌아갑니다');setTimeout(()=>go(4),900);
+  });
+  document.getElementById('pdfBtn').addEventListener('click',()=>{stamp('시스템','보고서 PDF 생성 · NB-2026-1001-007.pdf');say('보고서 PDF 저장됨')});
+  document.getElementById('outBtn').addEventListener('click',()=>{provided=true;renderLine();stamp('김형남','출력본 제공 · 보관 90일 · 해시 기록');say('출력본 제공 완료 — 감사 로그에 기록됨')});
+  buildLine();
+  document.querySelectorAll('.job').forEach(j=>j.addEventListener('click',()=>{document.querySelectorAll('.job').forEach(x=>x.classList.remove('sel'));j.classList.add('sel')}));
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "id": "face_yunet_2023mar",
+      "file": "face_yunet_2023mar.onnx",
+      "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+      "license": "MIT",
+      "source": "OpenCV Zoo — models/face_detection_yunet (Shiqi Yu)",
+      "url": "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet",
+      "training_data": "WIDER FACE (공개 사전학습 가중치, 모델 라이선스 MIT)",
+      "task": "face",
+      "arch": "yunet",
+      "classes": {
+        "0": "face"
+      },
+      "input_size": 640,
+      "audit_capable": true
+    },
+    {
+      "id": "yolox_nano_coco",
+      "file": "yolox_nano.onnx",
+      "sha256": "c789161ed43c8269fcd4e67c67eeeb4e80c622da2eb296a20bc6007bd18a0b7d",
+      "license": "Apache-2.0",
+      "source": "Megvii-BaseDetection/YOLOX release 0.1.1rc0",
+      "url": "https://github.com/Megvii-BaseDetection/YOLOX/releases/tag/0.1.1rc0",
+      "training_data": "COCO 2017",
+      "task": "object",
+      "arch": "yolox",
+      "classes": {
+        "0": "person",
+        "2": "vehicle",
+        "3": "vehicle",
+        "5": "vehicle",
+        "7": "vehicle"
+      },
+      "input_size": 416,
+      "audit_capable": false
+    },
+    {
+      "id": "yolox_s_coco",
+      "file": "yolox_s.onnx",
+      "sha256": "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063",
+      "license": "Apache-2.0",
+      "source": "Megvii-BaseDetection/YOLOX release 0.1.1rc0",
+      "url": "https://github.com/Megvii-BaseDetection/YOLOX/releases/tag/0.1.1rc0",
+      "training_data": "COCO 2017",
+      "task": "object",
+      "arch": "yolox",
+      "classes": {
+        "0": "person",
+        "2": "vehicle",
+        "3": "vehicle",
+        "5": "vehicle",
+        "7": "vehicle"
+      },
+      "input_size": 640,
+      "audit_capable": false
+    },
+    {
+      "id": "plate_rtdetr_openimages",
+      "file": "plate_rtdetr_openimages.onnx",
+      "sha256": "50f9bf9d7eaa97ade59063ba608107203d0575a84c0fb27e0ebf3bab6f594366",
+      "license": "Apache-2.0",
+      "source": "Topurrra/rtdetr-license-plate-detection-onnx (RT-DETRv2 R18, base PekingU/rtdetr_v2_r18vd Apache-2.0)",
+      "url": "https://huggingface.co/Topurrra/rtdetr-license-plate-detection-onnx",
+      "training_data": "Open Images V7 'Vehicle registration plate' — 이미지 CC-BY-2.0, 주석 CC-BY-4.0 (출처 고지 필요). 국내 번호판 미학습 — AI Hub 재학습(G4-01) 전 1차 모델",
+      "task": "plate",
+      "arch": "rtdetr",
+      "classes": {
+        "0": "plate"
+      },
+      "input_size": 640,
+      "audit_capable": true,
+      "score_scale": 5.0,
+      "notes": "단일 클래스 RT-DETR은 점수가 0.1 내외로 압축됨 → ×5 보정 후 스펙 임계(plate 0.25 = 원점수 0.05) 적용"
+    },
+    {
+      "id": "plate_from_vehicle",
+      "file": null,
+      "sha256": null,
+      "license": "자체",
+      "source": "NuriBlur 자체 규칙 — 차량 박스 하단 영역을 번호판 후보로 마스킹 (국내 번호판 모델 학습 전 임시, docs/07)",
+      "url": null,
+      "training_data": null,
+      "task": "plate",
+      "arch": "rule_vehicle_lower",
+      "classes": {
+        "0": "plate"
+      },
+      "input_size": 0,
+      "audit_capable": false
+    }
+  ],
+  "profiles": {
+    "gpu_precise": {
+      "object": "yolox_s_coco",
+      "face": "face_yunet_2023mar",
+      "plate": "plate_rtdetr_openimages",
+      "detect_interval": 2,
+      "face_long_side": 1920,
+      "plate_fallback": "plate_from_vehicle",
+      "plate_every": 1
+    },
+    "gpu_fast": {
+      "object": "yolox_nano_coco",
+      "face": "face_yunet_2023mar",
+      "plate": "plate_rtdetr_openimages",
+      "detect_interval": 2,
+      "face_long_side": 1280,
+      "plate_fallback": "plate_from_vehicle",
+      "plate_every": 1
+    },
+    "cpu": {
+      "object": "yolox_nano_coco",
+      "face": "face_yunet_2023mar",
+      "plate": "plate_rtdetr_openimages",
+      "detect_interval": 4,
+      "face_long_side": 1280,
+      "plate_fallback": "plate_from_vehicle",
+      "plate_every": 3
+    }
+  }
+}

@@ -1,0 +1,4 @@
+*.onnx filter=lfs diff=lfs merge=lfs -text
+tests/data/**/*.mp4 filter=lfs diff=lfs merge=lfs -text
+tests/data/**/*.mov filter=lfs diff=lfs merge=lfs -text
+tests/data/**/*.mkv filter=lfs diff=lfs merge=lfs -text
