@@ -9,9 +9,12 @@ import getpass
 import json
 import os
 import sqlite3
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
+
+from worker.errors import NBError
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS org_settings (key TEXT PRIMARY KEY, value TEXT);
@@ -49,6 +52,51 @@ DEFAULTS = {
 }
 
 
+USERS_SID = "*S-1-5-32-545"  # BUILTIN\\Users
+
+
+class OrgDBReadOnly(NBError):
+    code = "E_ORG_DB_READONLY"
+
+
+def _elevated() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except OSError:
+        return False
+
+
+def _share_with_users(base: Path) -> None:
+    """관리자 권한으로 실행 중이면 공용 데이터 폴더를 일반 사용자도 쓸 수 있게(설치 프로그램의 users-modify와 같음).
+    그러지 않으면 관리자 권한 실행이 만든 org.sqlite를 이후 일반 권한 실행에서 쓸 수 없다."""
+    if not _elevated():
+        return
+    import subprocess
+
+    subprocess.run(["icacls", str(base), "/grant", f"{USERS_SID}:(OI)(CI)M", "/T", "/Q"],
+                   capture_output=True, timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def check_writable(path: Path) -> None:
+    """기존 DB 파일(+WAL/SHM)에 쓸 수 있는지. 없으면 원인과 해결 방법을 담은 오류."""
+    for p in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):
+        if not p.exists():
+            continue
+        try:
+            with open(p, "ab"):
+                pass
+        except PermissionError as e:
+            raise OrgDBReadOnly(
+                f"기관 모드 DB에 쓸 수 없습니다: {path}\n"
+                "관리자 권한으로 실행했을 때 만들어진 파일이라 일반 권한에서는 읽기 전용입니다.\n"
+                "해결: 관리자 권한 PowerShell에서 아래 명령을 한 번 실행하세요.\n"
+                f'icacls "{path.parent}" /grant "{USERS_SID}:(OI)(CI)M" /T') from e
+
+
 def default_path() -> Path:
     env = os.environ.get("NURIBLUR_ORG_DB")
     if env:
@@ -56,6 +104,7 @@ def default_path() -> Path:
     base = Path(os.environ.get("PROGRAMDATA") or os.environ.get("LOCALAPPDATA") or Path.home()) / "NuriBlur"
     try:
         base.mkdir(parents=True, exist_ok=True)
+        _share_with_users(base)
         probe = base / ".w"
         probe.write_text("")
         probe.unlink()
@@ -80,6 +129,7 @@ class OrgDB:
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path or default_path())
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        check_writable(self.path)
         self.lock = threading.RLock()
         self.conn = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
         self.conn.row_factory = sqlite3.Row

@@ -405,5 +405,6 @@
   "audit.obj_protect": "객체 목록: 마스킹 제외 {n}개 ({tags})",
   "audit.obj_ignore": "객체 목록: 객체 아님 {n}개 ({tags})",
   "audit.obj_mask": "객체 목록: 마스킹(지정 해제) {n}개 ({tags})",
-  "log.elevated_drop": "관리자 권한으로 실행 중 — 끌어다 놓기는 Windows 기본 방식(WM_DROPFILES)으로 받습니다"
+  "log.elevated_drop": "관리자 권한으로 실행 중 — 끌어다 놓기는 Windows 기본 방식(WM_DROPFILES)으로 받습니다",
+  "dlg.start_failed": "프로그램을 시작할 수 없습니다"
 }

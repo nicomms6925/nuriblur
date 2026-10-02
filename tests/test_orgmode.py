@@ -175,3 +175,21 @@ def test_dismissal_logged_and_unlocks_review(org, tmp_path):
     ap.submit_review(cid, me, pin=PINS["김형남"])
     e = [x for x in A.AuditLog(org).entries(cid) if x["action"] == A.EXPOSURE_DISMISSED]
     assert len(e) == 2 and "노면 반사" in e[0]["detail"] and A.AuditLog(org).verify()[0]
+
+
+def test_readonly_db_gives_clear_error(tmp_path):
+    """관리자 권한 실행이 만든 DB처럼 쓸 수 없으면 sqlite 오류 대신 원인·해결 방법을 담은 오류."""
+    import os
+    import stat
+
+    from worker.orgmode.db import OrgDBReadOnly
+
+    p = tmp_path / "org.sqlite"
+    OrgDB(p).close()
+    os.chmod(p, stat.S_IREAD)
+    try:
+        with pytest.raises(OrgDBReadOnly) as e:
+            OrgDB(p)
+        assert "icacls" in str(e.value)
+    finally:
+        os.chmod(p, stat.S_IREAD | stat.S_IWRITE)

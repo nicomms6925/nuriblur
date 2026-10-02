@@ -31,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     from app.i18n import tr
     from app.views.main_window import MainWindow
     from app.worker_client import WorkerClient
+    from worker.errors import NBError
 
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication.instance() or QApplication([sys.argv[0]])
@@ -43,7 +44,16 @@ def main(argv: list[str] | None = None) -> int:
         pass
     org_mode = os.environ.get("NURIBLUR_EDITION", "org") != "b2c"
     worker = WorkerClient()
-    win = MainWindow(worker, org_mode=org_mode)
+    try:
+        win = MainWindow(worker, org_mode=org_mode)
+    except NBError as e:  # 예: 기관 DB 권한 — 원인·해결 방법을 보여 주고 종료
+        from PySide6.QtWidgets import QMessageBox
+
+        box = QMessageBox(QMessageBox.Critical, tr("app.name"), tr("dlg.start_failed"))
+        box.setInformativeText(str(e))
+        box.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        box.exec()
+        return 1
     worker.start()
     win.show()
     files = [Path(a) for a in argv if Path(a).exists()]
