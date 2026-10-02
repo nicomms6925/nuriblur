@@ -53,7 +53,8 @@ class _Body(QWidget):
             y = i * LANE_H
             if ln.tid == self.o.selected:
                 p.fillRect(0, y, self.width(), LANE_H, QColor(pal.panel2))
-            c = QColor({"protect": theme.PROTECT, "mask": theme.MASK, "review": theme.REVIEW}[ln.status])
+            c = QColor({"protect": theme.PROTECT, "mask": theme.MASK, "review": theme.REVIEW,
+                        "ignore": theme.IGNORE}.get(ln.status, theme.MASK))
             p.fillRect(QRectF(10, y + 9, 8, 8), c)
             p.setPen(QColor(pal.ink2))
             p.drawText(QRectF(24, y, HEAD_W - 28, LANE_H), Qt.AlignVCenter | Qt.AlignLeft, ln.label)

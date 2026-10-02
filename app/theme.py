@@ -12,6 +12,7 @@ MASK = "#F28C38"
 PROTECT = "#2BB3A3"
 REVIEW = "#E8C547"
 DANGER = "#E5534B"
+IGNORE = "#8A93A3"   # 객체 아님(오검출) — 가리지 않음"
 
 
 @dataclass(frozen=True)

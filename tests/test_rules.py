@@ -93,3 +93,16 @@ def test_plate_vehicle_link_inheritance():
     assert d[3]["protected"] and not d[4]["protected"]
     d = _d(compute([veh, plate, other], [{"id": 1, "kind": "click", "payload": {"track_id": 3}}]))
     assert d[7]["protected"]
+
+
+def test_not_object_unmasked_without_link_inheritance():
+    """'객체 아님'은 가리지 않지만 연결된 사람에게 보호를 넘기지 않고, 재검사 보호 영역에도 들어가지 않는다."""
+    from worker.pipeline.mask import RenderProfile, build_plan
+
+    tracks = [_t(1, linked_person_id=5), _t(5, "person"), _t(2)]
+    rules = [{"id": 1, "kind": "click", "payload": {"track_id": 1, "protect": True, "not_object": True}}]
+    d = _d(compute(tracks, rules))
+    assert d[1]["protected"] and not d[5]["protected"] and not d[2]["protected"]
+    plan = build_plan(tracks, d, rules, RenderProfile(), 20, 30)
+    assert all(r.track_id != 1 for f in plan.regions for r in plan.regions[f])
+    assert not plan.protected  # 재검사는 이 자리를 그대로 검사한다

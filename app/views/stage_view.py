@@ -24,7 +24,8 @@ from app import theme
 from app.i18n import tr
 from app.widgets.common import button, label
 
-STATUS_COLOR = {"protect": theme.PROTECT, "mask": theme.MASK, "review": theme.REVIEW, "exposure": theme.DANGER}
+STATUS_COLOR = {"protect": theme.PROTECT, "mask": theme.MASK, "review": theme.REVIEW, "exposure": theme.DANGER,
+                "ignore": theme.IGNORE}
 
 
 def timecode(frame: int, fps: float, with_frames: bool = True) -> str:
@@ -50,7 +51,10 @@ class BoxItem(QGraphicsRectItem):
         self.setCursor(Qt.PointingHandCursor)
         self.setAcceptHoverEvents(True)
         self.setFlag(QGraphicsItem.ItemIsSelectable, False)
-        text = tag + (" ✓" if status == "protect" else " ?" if status == "review" else " !" if status == "exposure" else "")
+        text = tag + {"protect": " ✓", "review": " ?", "exposure": " !", "ignore": " ×"}.get(status, "")
+        if status == "ignore":
+            pen.setStyle(Qt.DotLine)
+            self.setPen(pen)
         f = QFont(theme.mono_family())
         f.setPixelSize(max(8, int(10 / scale)))
         f.setBold(True)

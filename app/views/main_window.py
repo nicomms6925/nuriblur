@@ -217,6 +217,10 @@ class MainWindow(QMainWindow):
         self.review.done.connect(self._review_done)
         self.protect.next.connect(lambda: self.go(4))
         self.protect.reset.connect(self._reset_rules)
+        self.protect.objects.connect(self._open_objects)
+        self.review.objects.connect(self._open_objects)
+        self.objects_dlg = None
+        self._drop_filter = None
         self.protect.reanalyze.connect(self._reanalyze)
         self.setAcceptDrops(True)
         # '보호대상 외 전체 가리기'는 3단계와 5단계 체크박스가 같은 설정
@@ -555,6 +559,8 @@ class MainWindow(QMainWindow):
                 self._rebuild_timeline()
                 self._refresh_protect_counts()
                 self.top.set_step(self.step, self.max_step())
+                if self.objects_dlg is not None and self.objects_dlg.isVisible():
+                    self.objects_dlg.set_job(j)
             self._fetch_thumb(j)
             if after:
                 after()
@@ -681,7 +687,9 @@ class MainWindow(QMainWindow):
         fps = j.fps()
         span = f"{timecode(t.start_f, fps, False)[3:]}–{timecode(t.end_f, fps, False)[3:]}"
         d = j.decisions.get(t.id)
-        if st == "protect":
+        if st == "ignore":
+            why = tr("why.ignore")
+        elif st == "protect":
             why = tr("why.protect", c=d.confidence if d else 1.0)
         elif st == "review":
             why = tr("why.review")
@@ -752,7 +760,7 @@ class MainWindow(QMainWindow):
             a, b = j.tracks.get(s.to_id), j.tracks.get(s.from_id)
             if a and b and not b.merged_into:
                 gaps.setdefault(a.id, []).append((a.end_f, b.start_f))
-        order = {"protect": 0, "review": 1, "mask": 2}
+        order = {"protect": 0, "review": 1, "mask": 2, "ignore": 3}
         cls_order = {"face": 0, "plate": 1, "person": 2, "vehicle": 3}
         lanes = []
         for t in sorted((t for t in j.tracks.values() if not t.merged_into),
@@ -946,6 +954,55 @@ class MainWindow(QMainWindow):
             self.add_files(paths)
         else:
             self.say(tr("toast.drop_unsupported"))
+
+    # ---- 관리자 권한 실행 시 끌어다 놓기 ----
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        if self._drop_filter is None:
+            from app.win_drop import enable_dropfiles, is_elevated
+
+            if is_elevated():
+                # OLE 놓기는 권한이 다른 탐색기에서 막힌다 → Qt 놓기 대상을 끄고 WM_DROPFILES로 받는다
+                self.setAcceptDrops(False)
+                self.queue.drop.setAcceptDrops(False)
+                self._drop_filter = enable_dropfiles(int(self.winId()), self.add_files) or False
+                self.monitor.append_log("INFO", tr("log.elevated_drop"))
+            else:
+                self._drop_filter = False
+
+    # ---- 객체 목록 ----
+    def _open_objects(self) -> None:
+        j = self.job
+        if j is None or not j.tracks:
+            self.say(tr("toast.no_tracks"))
+            return
+        if self.objects_dlg is None:
+            from app.views.objects_dialog import ObjectsDialog
+
+            self.objects_dlg = ObjectsDialog(self)
+            self.objects_dlg.apply.connect(self._apply_objects)
+            self.objects_dlg.goto.connect(lambda f, t: (self.seek(f), self._select_track(t)))
+        self.objects_dlg.set_job(j)
+        self.objects_dlg.show()
+        self.objects_dlg.raise_()
+
+    def _apply_objects(self, ids: list, state: str) -> None:
+        """객체 목록에서 고른 트랙 전체: protect(마스킹 제외) | ignore(객체 아님) | mask(기본)."""
+        j = self.job
+        if j is None:
+            return
+        if self.org_mode and j.s in (S.PENDING_APPROVAL, S.APPROVED, S.DELIVERED):
+            self.say(tr("toast.locked"))
+            return
+        ids = [int(t) for t in ids if int(t) in j.tracks]
+        j.set_object_state(ids, state)
+        if self.approval and j.case_id:
+            tags = ", ".join(j.tag(j.tracks[t]) for t in ids[:30]) + (" …" if len(ids) > 30 else "")
+            self.approval.log_event(j.case_id, self.actor(), A.PROTECT_SET if state != "mask" else A.PROTECT_UNSET,
+                                    tr(f"audit.obj_{state}", n=len(ids), tags=tags))
+        dlg = self.objects_dlg
+        self._apply_rules(j, after=lambda: dlg.refresh() if dlg is not None and dlg.isVisible() else None)
+        self.say(tr(f"toast.obj_{state}", n=len(ids)))
 
     # ---- 재설정 ----
     def _reset_rules(self) -> None:

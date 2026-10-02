@@ -163,3 +163,14 @@ def test_mask_all_unprotected_render(project_copy, gt, tmp_path):
                lambda e: None, run_audit=True)
     assert r["mask_tracks"].get("vehicle", 0) >= 1 and r["mask_tracks"].get("person", 0) >= 1
     assert r["exposures"] == [], r["exposures"][:5]
+
+
+def test_not_object_on_real_face_is_caught_by_audit(project_copy, tmp_path):
+    """실제 얼굴을 실수로 '객체 아님'으로 지정해도 재검사가 노출로 잡아야 한다(보호와 다름)."""
+    with Project.open(project_copy) as p:
+        faces = [t.id for t in p.tracks() if t.cls == "face"]
+        rules_mod.apply(p, [{"kind": "click", "payload": {"track_id": t, "protect": True, "not_object": True}}
+                            for t in faces])
+        p.save()
+    r = render(project_copy, tmp_path / "fp.mp4", {}, "t", JobControl("t"), lambda e: None, run_audit=True)
+    assert any(e["cls"] == "face" for e in r["exposures"])

@@ -248,3 +248,29 @@ def test_exposures_auto_mask_rounds_then_review(win, qtbot, tmp_path):
     win._render_done(j, e)
     qtbot.wait(1_500)
     assert calls == [True] and j.s == S.REVIEWING and j.auto_rounds == 0
+
+
+def test_objects_dialog_bulk_states(win, qtbot, clip):
+    """객체 목록: 영상 전체 객체를 묶어 보여 주고, 여러 개를 골라 마스킹 제외·객체 아님·마스킹으로 지정."""
+    win.add_files([clip])
+    qtbot.waitUntil(lambda: win.job is not None and win.job.media is not None, timeout=60_000)
+    win.input._start()
+    qtbot.waitUntil(lambda: win.step == 3, timeout=300_000)
+    win._open_objects()
+    dlg = win.objects_dlg
+    dlg.noise.setChecked(False)
+    assert dlg.list.count() >= 2
+    total_tracks = sum(len(dlg.list.item(i).data(0x0100)["members"]) for i in range(dlg.list.count()))
+    assert total_tracks == len(win.job.tracks)  # 묶음이 모든 트랙을 덮는다
+    dlg.list.item(0).setSelected(True)
+    first = dlg.list.item(0).data(0x0100)["members"]
+    dlg._apply("ignore")
+    qtbot.waitUntil(lambda: all(win.job.status_of(t) == "ignore" for t in first), timeout=60_000)
+    dlg.list.clearSelection()
+    dlg.list.item(1).setSelected(True)
+    second = dlg.list.item(1).data(0x0100)["members"]
+    dlg._apply("protect")
+    qtbot.waitUntil(lambda: all(win.job.status_of(t) == "protect" for t in second), timeout=60_000)
+    # 되돌리기(마스킹)
+    win._apply_objects(first + second, "mask")
+    qtbot.waitUntil(lambda: all(win.job.status_of(t) == "mask" for t in first + second), timeout=60_000)

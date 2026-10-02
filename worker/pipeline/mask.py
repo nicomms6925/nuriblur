@@ -147,7 +147,10 @@ def build_plan(tracks: list[TrackRow], decisions: dict[int, dict[str, Any]], rul
                profile: RenderProfile, n_frames: int, fps: float, plate_stride: int = 0) -> MaskPlan:
     plan = MaskPlan()
     masked = {t.id for t in tracks if not (decisions.get(t.id) or {}).get("protected")}
-    protected_ids = {t.id for t in tracks} - masked
+    from worker.pipeline.rules import not_object_ids
+
+    # '객체 아님'은 가리지 않지만 재검사 보호 영역에도 넣지 않는다 — 실제 얼굴·번호판이면 재검사가 잡는다
+    protected_ids = {t.id for t in tracks} - masked - not_object_ids(tracks, rules)
     masked_faces = {t.id for t in tracks if t.cls == "face" and t.id in masked}
     persons_with_masked_face = {t.linked_person_id for t in tracks if t.id in masked_faces and t.linked_person_id}
     last = max(n_frames - 1, 0)

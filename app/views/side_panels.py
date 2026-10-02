@@ -249,11 +249,14 @@ class ProtectPanel(Panel):
     mask_all = Signal(bool)
     reset = Signal()
     reanalyze = Signal()
+    objects = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         s = self.sec(tr("prot.title"))
         s.add(label(tr("prot.note"), "note", wrap=True))
+        s.add(btn_row(button(tr("obj.open"), "pri", self.objects.emit)))
+        s.add(label(tr("obj.open_note"), "note", wrap=True))
         self.all_c = QCheckBox(tr("prot.mask_all"))
         self.all_c.toggled.connect(self.mask_all.emit)
         s.add(self.all_c)
@@ -315,6 +318,7 @@ class ReviewPanel(Panel):
     goto = Signal(int, int)          # frame, track
     mask_exposure = Signal(int)      # 노출 인덱스 (-1 = 전부)
     manual_box = Signal()
+    objects = Signal()
     body_mask = Signal()
     preview_mode = Signal(str)
     done = Signal()
@@ -332,6 +336,7 @@ class ReviewPanel(Panel):
         self.manual_b.setCheckable(True)
         self.body_b = button(tr("rev.body_mask"), "", self.body_mask.emit)
         s.add(btn_row(self.manual_b, self.body_b))
+        s.add(btn_row(button(tr("obj.open"), "", self.objects.emit)))
         self.manual_note = label(tr("rev.manual_note"), "note", wrap=True)
         s.add(self.manual_note)
         s = self.sec(tr("rev.preview"))

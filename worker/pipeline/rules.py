@@ -42,6 +42,15 @@ def root_of(tid: int, by_id: dict[int, TrackRow]) -> int:
     return tid
 
 
+def not_object_ids(tracks: list[TrackRow], rules: list[dict[str, Any]]) -> set[int]:
+    """검수자가 '객체 아님(오검출)'으로 지정한 트랙(병합된 자식 포함)."""
+    by_id = {t.id: t for t in tracks}
+    roots = {root_of(int(r["payload"]["track_id"]), by_id) for r in rules
+             if r["kind"] == "click" and (r.get("payload") or {}).get("not_object")
+             and (r["payload"].get("protect", True)) and int(r["payload"].get("track_id", -1)) in by_id}
+    return {t.id for t in tracks if root_of(t.id, by_id) in roots}
+
+
 def compute(tracks: list[TrackRow], rules: list[dict[str, Any]], fps: float = 30.0,
             threshold: float = DEFAULT_THRESHOLD, suggestions: list | None = None) -> list[dict[str, Any]]:
     by_id = {t.id: t for t in tracks}
@@ -58,6 +67,7 @@ def compute(tracks: list[TrackRow], rules: list[dict[str, Any]], fps: float = 30
             d.update(source_rule_id=rule_id, confidence=max(conf, d["confidence"]), flag="REVIEW")
 
     unprotect: set[int] = set()
+    fp = not_object_ids(tracks, rules)
     for r in rules:
         kind, p, rid = r["kind"], r.get("payload") or {}, r.get("id")
         if kind == "click":
@@ -65,6 +75,10 @@ def compute(tracks: list[TrackRow], rules: list[dict[str, Any]], fps: float = 30
             if tid not in by_id:
                 continue
             root = root_of(tid, by_id)
+            if p.get("not_object"):  # 오검출: 가리지 않음(보호와 달리 연결 승계 없음, 재검사는 그대로 받음)
+                if p.get("protect", True):
+                    dec[root].update(protected=True, source_rule_id=rid, confidence=1.0, flag="OK")
+                continue
             if p.get("protect", True):
                 protect(root, rid, float(p.get("confidence", 1.0)))
             else:
@@ -96,6 +110,8 @@ def compute(tracks: list[TrackRow], rules: list[dict[str, Any]], fps: float = 30
     for t in tracks:
         if t.cls in ("face", "plate") and t.linked_person_id in dec:  # 얼굴↔전신, 번호판↔차량
             pid = t.linked_person_id
+            if t.id in fp or pid in fp:  # '객체 아님'은 연결된 사람·차량에 보호를 넘기지 않는다
+                continue
             if dec[t.id]["protected"] and not dec[pid]["protected"]:
                 protect(pid, dec[t.id]["source_rule_id"], min(dec[t.id]["confidence"], LINK_CONFIDENCE))
             elif dec[pid]["protected"] and not dec[t.id]["protected"]:
@@ -104,6 +120,8 @@ def compute(tracks: list[TrackRow], rules: list[dict[str, Any]], fps: float = 30
     # 보호 트랙으로 이어지는 병합 제안 → 검수 필요(마스킹 유지)
     sugg = suggestions if suggestions is not None else merge_suggestions(tracks, fps)
     for s in sugg:
+        if s.to_id in fp:
+            continue
         if s.to_id in dec and s.from_id in dec and dec[s.to_id]["protected"] and not dec[s.from_id]["protected"]:
             dec[s.from_id]["flag"] = "REVIEW"
             dec[s.from_id]["confidence"] = max(dec[s.from_id]["confidence"], s.similarity)
