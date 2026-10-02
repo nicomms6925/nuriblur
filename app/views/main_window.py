@@ -214,6 +214,8 @@ class MainWindow(QMainWindow):
         self.review.body_mask.connect(self._body_mask)
         self.review.preview_mode.connect(self._preview_mode)
         self.review.done.connect(lambda: self.go(5))
+        self.protect.next.connect(lambda: self.go(4))
+        self.export.open_folder.connect(self._open_output_folder)
         self.export.start.connect(self.start_render)
         self.export.style_changed.connect(lambda _: self.refresh_frame())
         self.orgp.create_case.connect(self._case_info)
@@ -1049,6 +1051,7 @@ class MainWindow(QMainWindow):
             prof["watermark"] = tr("wm.text", receipt=c["receipt_no"] or "-", date=datetime.now().strftime("%Y-%m-%d"))
         j.audit_json = bool(prof.get("audit_json", False))
         j.exposures = []
+        self.export.open_b.setVisible(False)
         if j.s == S.PAUSED:
             return
         j.state.go(S.RENDERING)
@@ -1087,12 +1090,23 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(900, lambda: self.go(6))
             else:
                 self.say(tr("toast.render_done"))
+                self.export.open_b.setVisible(True)
         else:
             j.state.go(S.REVIEWING)
             self.monitor.stage.setText(tr("mon.audit_fail", n=e.audit_exposures))
             self._refresh_queue(j)
             self.say(tr("toast.audit_fail", n=e.audit_exposures))
             QTimer.singleShot(900, lambda: self.go(4))
+
+    def _open_output_folder(self) -> None:
+        """탐색기에서 출력 파일을 선택한 상태로 연다."""
+        import subprocess
+
+        j = self.job
+        if j is None or not j.output_path or not Path(j.output_path).exists():
+            self.say(tr("toast.no_output"))
+            return
+        subprocess.Popen(["explorer", "/select,", str(Path(j.output_path).resolve())])
 
     def _write_audit_json(self, j: JobItem, e: pb.Event) -> None:
         data = {"output": e.output_path, "sha256": e.output_sha256, "audit_exposures": e.audit_exposures,

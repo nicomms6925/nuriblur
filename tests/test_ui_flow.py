@@ -57,8 +57,10 @@ def test_full_flow_to_delivery(win, qtbot, clip):
     win.toggle_track(face)
     qtbot.waitUntil(lambda: win.job.status_of(face) == "protect", timeout=60_000)
     assert win.job.counters()[0] >= 1
-    win.go(4)
-    win.go(5)
+    win.protect.next.emit()          # 3단계 '보호대상 확정 · 검수로' 버튼
+    assert win.step == 4
+    win.review.done.emit()           # 4단계 '검수 완료 · 내보내기로' 버튼
+    assert win.step == 5
     win.export._start()
     qtbot.waitUntil(lambda: win.job.s in (S.AUDITED, S.REVIEWING), timeout=600_000)
     assert win.job.s == S.AUDITED, win.job.exposures[:3]

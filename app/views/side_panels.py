@@ -245,6 +245,7 @@ class ProtectPanel(Panel):
     toggle = Signal(int, bool)
     focus = Signal(int)
     add_plate = Signal(str)
+    next = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -278,6 +279,9 @@ class ProtectPanel(Panel):
         b2.setToolTip(tr("prot.v1_tooltip"))
         s.add(btn_row(b1, b2))
         s.add(label(tr("prot.plate_note"), "note", wrap=True))
+        s = self.sec()
+        s.add(btn_row(button(tr("prot.next"), "pri", self.next.emit)))
+        s.add(label(tr("prot.next_note"), "note", wrap=True))
         self.finish()
 
     def set_counts(self, prot: int, mask: int, rev: int) -> None:
@@ -340,6 +344,7 @@ class ReviewPanel(Panel):
 # ---------------- 5 내보내기 ----------------
 class ExportPanel(Panel):
     start = Signal(dict, str)
+    open_folder = Signal()
     style_changed = Signal(str)
 
     def __init__(self, org_mode: bool, parent=None):
@@ -397,7 +402,9 @@ class ExportPanel(Panel):
         rl.addWidget(button("…", "", self._browse))
         s.add(row)
         self.start_b = button(tr("exp.start"), "pri", self._start)
-        s.add(btn_row(self.start_b))
+        self.open_b = button(tr("exp.open_folder"), "", lambda: self.open_folder.emit())
+        self.open_b.setVisible(False)
+        s.add(btn_row(self.start_b, self.open_b))
         self.note = label("", "note", wrap=True)
         s.add(self.note)
         self.finish()
